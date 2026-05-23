@@ -1,0 +1,6 @@
+requests
+python-dotenv
+pillow
+flask
+pigpio
+adafruit-circuitpython-sharpmemorydisplay

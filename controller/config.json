@@ -1,0 +1,19 @@
+{
+  "items": [
+    {
+      "type": "favorite",
+      "id": "11",
+      "label": "GET HAPPY!"
+    },
+    {
+      "type": "favorite",
+      "id": "13",
+      "label": "2 degrees of indie music"
+    },
+    {
+      "type": "favorite",
+      "id": "8",
+      "label": "VSQ Performs the Hits of 2015 Vol. 3"
+    }
+  ]
+}
