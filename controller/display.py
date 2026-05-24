@@ -20,7 +20,7 @@ SIM_HELP = """  Controls
 if not SIMULATE:
     from PIL import Image, ImageDraw, ImageFont
 
-    from sharp_hw import open_display
+    from sharp_hw import open_display, show_image
 
 _SIM_HISTORY_MAX = 30
 
@@ -91,7 +91,6 @@ class Display:
             else:
                 draw.text((4, y), name, font=small, fill=1)
 
-        self._disp.blit(img, invert=self._invert)
-        self._disp.show()
+        show_image(self._disp, img, invert=self._invert)
         if sys.stdout.isatty() and items:
             print(f"[display] ▶ {items[selected_index]['name']}", flush=True)

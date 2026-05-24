@@ -6,12 +6,13 @@ import sys
 import time
 
 from sharp_hw import (
-    SharpDisplay,
+    open_display,
     pattern_blank,
     pattern_border,
     pattern_fill,
     pattern_stripes,
     pattern_text,
+    show_image,
 )
 
 PATTERNS = [
@@ -26,27 +27,22 @@ PATTERNS = [
 def main():
     width = int(os.environ.get("DISPLAY_WIDTH", "144"))
     height = int(os.environ.get("DISPLAY_HEIGHT", "168"))
-    hz = int(os.environ.get("DISPLAY_SPI_HZ", "2000000"))
-    cs_high = os.environ.get("DISPLAY_CS_ACTIVE_HIGH", "1").lower() not in ("0", "false", "no")
     invert = os.environ.get("DISPLAY_INVERT", "").lower() in ("1", "true", "yes")
 
-    print(f"Sharp test — {width}×{height} @ {hz}Hz  CS_active_high={cs_high}  invert={invert}")
+    print(f"Sharp test — {width}×{height}  invert={invert}")
     print("Ctrl+C to stop. Patterns cycle every 3s.\n")
     print("If still static, try:")
     print("  DISPLAY_WIDTH=168 DISPLAY_HEIGHT=144 python display_test.py  # swapped")
-    print("  DISPLAY_SPI_HZ=500000 python display_test.py")
-    print("  DISPLAY_CS_ACTIVE_HIGH=0 python display_test.py")
     print("  DISPLAY_INVERT=1 python display_test.py\n")
 
-    disp = SharpDisplay(width, height, baudrate=hz, cs_active_high=cs_high)
+    disp, _ = open_display()
     i = 0
     try:
         while True:
             name, fn = PATTERNS[i % len(PATTERNS)]
             print(f"→ {name}", flush=True)
             img = fn(width, height)
-            disp.blit(img, invert=invert)
-            disp.show()
+            show_image(disp, img, invert=invert)
             time.sleep(3)
             i += 1
     except KeyboardInterrupt:
