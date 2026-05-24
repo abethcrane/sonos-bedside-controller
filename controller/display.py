@@ -20,7 +20,7 @@ SIM_HELP = """  Controls
 if not SIMULATE:
     from PIL import Image, ImageDraw, ImageFont
 
-    from sharp_hw import open_display, show_image
+    from sharp_hw import open_display, pattern_blank, show_image
 
 _SIM_HISTORY_MAX = 30
 
@@ -94,3 +94,13 @@ class Display:
         show_image(self._disp, img, invert=self._invert)
         if sys.stdout.isatty() and items:
             print(f"[display] ▶ {items[selected_index]['name']}", flush=True)
+
+    def clear(self):
+        """Blank the panel (Sharp memory displays hold the last frame until updated)."""
+        if SIMULATE:
+            return
+        show_image(
+            self._disp,
+            pattern_blank(DISPLAY_WIDTH, DISPLAY_HEIGHT),
+            invert=self._invert,
+        )

@@ -2,6 +2,7 @@
 
 import json
 import os
+import signal
 import sys
 import tty
 import termios
@@ -151,8 +152,14 @@ def read_key():
     return ch
 
 # ── main ──────────────────────────────────────────────────────────────────────
+def _raise_keyboard_interrupt(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main():
     global ordered, selected
+
+    signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
 
     # fetch from Sonos
     playlists_by_id, favorites_by_id = fetch_sonos_data()
@@ -165,40 +172,41 @@ def main():
     flask_thread.start()
     print("Config server running on http://localhost:8080")
 
-    # initial render
-    display.render_list(ordered, selected)
+    try:
+        # initial render
+        display.render_list(ordered, selected)
 
-    if not USE_ENCODERS and sys.stdout.isatty():
-        print(SIM_HELP)
+        if not USE_ENCODERS and sys.stdout.isatty():
+            print(SIM_HELP)
 
-    if USE_ENCODERS:
-        # ── Pi + encoders wired ───────────────────────────────────────────
-        enc_list  = Encoder(clk=17, dt=27, sw=22, on_rotate=scroll,   on_press=select)
-        enc_vol   = Encoder(clk=5,  dt=26, sw=13, on_rotate=volume,   on_press=toggle_play_pause)
+        if USE_ENCODERS:
+            # ── Pi + encoders wired ───────────────────────────────────────────
+            enc_list  = Encoder(clk=17, dt=27, sw=22, on_rotate=scroll,   on_press=select)
+            enc_vol   = Encoder(clk=5,  dt=26, sw=13, on_rotate=volume,   on_press=toggle_play_pause)
 
-        import time
-        while True:
-            if should_reload():
-                do_reload(playlists_by_id, favorites_by_id)
-            time.sleep(0.05)
+            import time
+            while True:
+                if should_reload():
+                    do_reload(playlists_by_id, favorites_by_id)
+                time.sleep(0.05)
 
-    else:
-        # ── Mac, or Pi with USE_KEYBOARD=1 (no encoders yet) ──────────────
-        try:
+        else:
+            # ── Mac, or Pi with USE_KEYBOARD=1 (no encoders yet) ──────────────
             while True:
                 if should_reload():
                     do_reload(playlists_by_id, favorites_by_id)
                 ch = read_key()
-                # setraw() clears ISIG — Ctrl+C is \x03 bytes, not SIGINT; Flask's "CTRL+C" hint is wrong here
+                # setraw() clears ISIG — Ctrl+C is \x03 bytes, not SIGINT
                 if ch in ("q", "\x03", "\x04"):
                     print("\nBye.")
                     break
                 fn = KEYS.get(ch)
                 if fn:
                     fn()
-        except KeyboardInterrupt:
-            print("\nBye.")
-            sys.exit(0)
+    except KeyboardInterrupt:
+        print("\nBye.")
+    finally:
+        display.clear()
 
 if __name__ == "__main__":
     main()
