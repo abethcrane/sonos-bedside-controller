@@ -21,7 +21,7 @@ from sonos import (
     play_pause,
     set_volume,
 )
-from display import Display
+from display import Display, SIM_HELP
 from server import app, should_reload
 
 if USE_ENCODERS:
@@ -167,6 +167,9 @@ def main():
 
     # initial render
     display.render_list(ordered, selected)
+
+    if not USE_ENCODERS and sys.stdout.isatty():
+        print(SIM_HELP)
 
     if USE_ENCODERS:
         # ── Pi + encoders wired ───────────────────────────────────────────

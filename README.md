@@ -338,5 +338,6 @@ Hold the board still — friction-fit connections pop out easily. Promote to bre
 | Encoders dead | `sudo systemctl status pigpiod` — daemon must be running |
 | Test on Pi without encoders wired | `USE_KEYBOARD=1 python main.py` over SSH (same keys as Mac) |
 | Test keyboard with SPI enabled but no display | `SIMULATE_DISPLAY=1 USE_KEYBOARD=1 python main.py` |
+| Display static / snow | Wrong panel size? Try `DISPLAY_WIDTH=144 DISPLAY_HEIGHT=168` (1.3") or slower SPI: `DISPLAY_SPI_HZ=1000000`. Check DISP→3.3V and EMD→GND. |
 | Display blank | SPI enabled? `ls /dev/spidev0.0`. See [Hardware wiring → Sharp display](#sharp-memory-display--smaller-panel-250122) |
 | Can't reach `:8080` from Mac | Pi and Mac on same WiFi? Try `ping sonos-box.local` |

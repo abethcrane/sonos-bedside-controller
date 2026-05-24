@@ -1,4 +1,5 @@
 import os
+import sys
 import threading
 from collections import deque
 
@@ -12,6 +13,8 @@ SIMULATE = (
 # Panel size — override via env for 2.7" #4694: DISPLAY_WIDTH=400 DISPLAY_HEIGHT=240
 DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", "250"))
 DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "122"))
+
+DISPLAY_SPI_HZ = int(os.environ.get("DISPLAY_SPI_HZ", "2000000"))
 
 SIM_HELP = """  Controls
   j = down   k = up   enter = select   space = play/pause
@@ -79,12 +82,16 @@ class Display:
             self._sim_lock = None
             spi = busio.SPI(board.SCK, MOSI=board.MOSI)
             cs = digitalio.DigitalInOut(board.D8)
-            self.disp = SharpMemoryDisplay(spi, cs, DISPLAY_WIDTH, DISPLAY_HEIGHT)
+            self.disp = SharpMemoryDisplay(
+                spi, cs, DISPLAY_WIDTH, DISPLAY_HEIGHT, baudrate=DISPLAY_SPI_HZ
+            )
             print(f"[display] Sharp {DISPLAY_WIDTH}×{DISPLAY_HEIGHT} ready")
 
     def sim_log(self, line: str):
-        """Append one line to the Mac simulator log (no-op on hardware)."""
+        """Log to simulator history; also echo to SSH terminal when attached."""
         if not SIMULATE:
+            if sys.stdout.isatty():
+                print(f"  {line}", flush=True)
             return
         with self._sim_lock:
             self._sim_history.append(line)
@@ -108,17 +115,18 @@ class Display:
                 print(f"{prefix}{item['name']}")
             return
 
+        # Sharp: 0 = light (paper), 1 = dark pixel
         w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
-        img = Image.new("1", (w, h), 1)
+        img = Image.new("1", (w, h), 0)
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
         small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
 
-        draw.text((4, 2), header, font=font, fill=0)
-        draw.line([(0, 16), (w - 1, 16)], fill=0, width=1)
+        draw.text((4, 2), header, font=font, fill=1)
+        draw.line([(0, 16), (w - 1, 16)], fill=1, width=1)
 
         line_h = 16
-        max_visible = (h - 20) // line_h
+        max_visible = max(1, (h - 20) // line_h)
         start = max(0, min(selected_index - max_visible // 2, len(items) - max_visible))
         visible = items[start : start + max_visible]
 
@@ -129,10 +137,12 @@ class Display:
             if len(name) > 28:
                 name = name[:27] + "…"
             if idx == selected_index:
-                draw.rectangle([(0, y - 1), (w - 1, y + line_h - 2)], fill=0)
-                draw.text((4, y), name, font=small, fill=1)
-            else:
+                draw.rectangle([(0, y - 1), (w - 1, y + line_h - 2)], fill=1)
                 draw.text((4, y), name, font=small, fill=0)
+            else:
+                draw.text((4, y), name, font=small, fill=1)
 
         self.disp.image(img)
         self.disp.show()
+        if sys.stdout.isatty() and items:
+            print(f"[display] ▶ {items[selected_index]['name']}", flush=True)
