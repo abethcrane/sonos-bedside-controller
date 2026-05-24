@@ -21,7 +21,6 @@ SIM_HELP = """  Controls
   + = vol+   - = vol-   q or ^C = quit"""
 
 if not SIMULATE:
-    import adafruit_framebuf
     import adafruit_sharpmemorydisplay
     import board
     import busio
@@ -33,18 +32,28 @@ if not SIMULATE:
     _SHARPMEM_BIT_VCOM = 0x40
     _reverse_bit = adafruit_sharpmemorydisplay.reverse_bit
 
-    class SharpMemoryDisplay(adafruit_sharpmemorydisplay.SharpMemoryDisplay):
-        """Adafruit driver with correct byte stride when width is not divisible by 8 (e.g. 250)."""
+    def _pack_sharp_buffer(pixels, width, height):
+        """Row-aligned SPI buffer — required when width is not divisible by 8 (e.g. 250)."""
+        line_len = (width + 7) // 8
+        buf = bytearray(line_len * height)
+        for y in range(height):
+            row = y * line_len
+            for x in range(width):
+                if pixels[x, y]:
+                    buf[row + x // 8] |= 1 << (7 - (x & 7))
+        return buf
+
+    class SharpMemoryDisplay:
+        """Minimal Sharp driver — bypasses Adafruit framebuf packing bug at 250px width."""
 
         def __init__(self, spi, scs_pin, width, height, *, baudrate=2000000):
             scs_pin.switch_to_output(value=True)
             self.spi_device = SPIDevice(spi, scs_pin, cs_active_value=True, baudrate=baudrate)
             self._buf = bytearray(1)
-            stride = (width + 7) // 8
-            self.buffer = bytearray(stride * height)
-            adafruit_framebuf.FrameBuffer.__init__(
-                self, self.buffer, width, height, buf_format=adafruit_framebuf.MHMSB
-            )
+            self.width = width
+            self.height = height
+            line_len = (width + 7) // 8
+            self.buffer = bytearray(line_len * height)
             self._vcom = True
 
         def show(self) -> None:
@@ -142,7 +151,7 @@ class Display:
             else:
                 draw.text((4, y), name, font=small, fill=1)
 
-        self.disp.image(img)
+        self.disp.buffer = _pack_sharp_buffer(img.load(), w, h)
         self.disp.show()
         if sys.stdout.isatty() and items:
             print(f"[display] ▶ {items[selected_index]['name']}", flush=True)
