@@ -273,7 +273,7 @@ Your breakout silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 
 | **EMD** | Blue | Ground *(required)* | — | 30 |
 | **CLK** | Orange | SPI clock | 11 | 23 |
 | **DI** | Yellow | SPI MOSI | 10 | 19 |
-| **CS** | Green | Chip select | 8 | 24 |
+| **CS** | Green | Chip select | 6 | 31 |
 | **3v3** | — | *(leave unconnected)* | — | — |
 | **EIN** | — | *(leave unconnected)* | — | — |
 
@@ -292,7 +292,7 @@ Use **separate Pi pins** for each wire — e.g. two red wires to pin 1 and pin 1
 | **3v3** | Output pin — leave unconnected when powering via VIN from Pi |
 | **EIN** | NC when EMD is tied to GND |
 
-Wiring matches `controller/display.py` (`board.SCK`, `board.MOSI`, `board.D8` for CS).
+Wiring matches `controller/sharp_hw.py`. **CS must be GPIO 6 (pin 31)** per [Adafruit #3502 guide](https://learn.adafruit.com/adafruit-sharp-memory-display-breakout/python-wiring) — conflicts with encoder 2 DT; move that encoder wire before running both together.
 
 #### Before first test
 

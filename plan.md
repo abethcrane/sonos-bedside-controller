@@ -89,10 +89,10 @@ Wire **C** and one **SW** leg to Pi **GND**. Use male-to-female jumpers: **femal
 | EMD | Blue | GND | — | 30 |
 | CLK | Orange | GPIO | 11 | 23 |
 | DI | Yellow | GPIO | 10 | 19 |
-| CS | Green | GPIO | 8 | 24 |
+| CS | Green | GPIO | 6 | 31 |
 | EIN, 3v3 | — | NC | — | — |
 
-Full table in [README.md](README.md#hardware-wiring). Code: `board.D8` for CS in `controller/display.py`.
+Full table in [README.md](README.md#hardware-wiring). **CS = GPIO 6 (pin 31)** per Adafruit #3502. Shares pin with encoder 2 DT — relocate encoder DT before using both.
 
 ### Network / config from a Mac
 

@@ -30,8 +30,16 @@ def pack_pil(img, width, height, *, invert=False):
     return buf
 
 
+def get_cs_pin():
+    """Adafruit #3502 uses GPIO 6 for CS on Pi — not GPIO 8 (hardware CE0)."""
+    n = int(os.environ.get("DISPLAY_CS_PIN", "6"))
+    return getattr(board, f"D{n}")
+
+
 class SharpDisplay:
-    def __init__(self, width, height, *, cs_pin=board.D8, baudrate=2_000_000, cs_active_high=True):
+    def __init__(self, width, height, *, cs_pin=None, baudrate=2_000_000, cs_active_high=True):
+        if cs_pin is None:
+            cs_pin = get_cs_pin()
         self.width = width
         self.height = height
         self.cs_active_high = cs_active_high
