@@ -3,14 +3,18 @@ import threading
 from collections import deque
 
 # Mac / dev: no SPI display. Pi with Sharp panel: /dev/spidev0.0 exists.
-SIMULATE = not os.path.exists("/dev/spidev0.0")
+# Set SIMULATE_DISPLAY=1 to force terminal mode even if SPI is enabled.
+SIMULATE = (
+    not os.path.exists("/dev/spidev0.0")
+    or os.environ.get("SIMULATE_DISPLAY", "").lower() in ("1", "true", "yes")
+)
 
 SIM_HELP = """  Controls
   j = down   k = up   enter = select   space = play/pause
   + = vol+   - = vol-   q or ^C = quit"""
 
 if not SIMULATE:
-    import board, busio, adafruit_sharpmemorydisplay
+    import board, busio, digitalio, adafruit_sharpmemorydisplay
     from PIL import Image, ImageDraw, ImageFont
 
 _SIM_HISTORY_MAX = 30
@@ -26,8 +30,9 @@ class Display:
             self._sim_history = None
             self._sim_lock = None
             spi = busio.SPI(board.SCK, MOSI=board.MOSI)
+            cs = digitalio.DigitalInOut(board.D8)
             self.disp = adafruit_sharpmemorydisplay.SharpMemoryDisplay(
-                spi, board.D6, 400, 240
+                spi, cs, 400, 240
             )
 
     def sim_log(self, line: str):
