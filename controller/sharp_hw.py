@@ -15,18 +15,23 @@ def get_cs_pin():
     return getattr(board, f"D{n}")
 
 
+def display_invert() -> bool:
+    """#3502 polarity is opposite PIL (0=white in code → black on panel unless inverted)."""
+    v = os.environ.get("DISPLAY_INVERT", "1").lower()
+    return v not in ("0", "false", "no")
+
+
 def open_display():
     width = int(os.environ.get("DISPLAY_WIDTH", "144"))
     height = int(os.environ.get("DISPLAY_HEIGHT", "168"))
-    invert = os.environ.get("DISPLAY_INVERT", "").lower() in ("1", "true", "yes")
     cs = digitalio.DigitalInOut(get_cs_pin())
     spi = busio.SPI(board.SCK, MOSI=board.MOSI)
     disp = adafruit_sharpmemorydisplay.SharpMemoryDisplay(spi, cs, width, height)
-    return disp, invert
+    return disp, display_invert()
 
 
-def show_image(disp, img, *, invert=False):
-    """Push a PIL image to the panel (mode 1: 0=white paper, 1=ink)."""
+def show_image(disp, img, *, invert=True):
+    """Push a PIL image (mode 1: 0=white paper, 1=ink) to the Sharp panel."""
     try:
         dither = Image.Dither.NONE
     except AttributeError:

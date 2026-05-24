@@ -6,6 +6,7 @@ import sys
 import time
 
 from sharp_hw import (
+    display_invert,
     open_display,
     pattern_blank,
     pattern_border,
@@ -27,13 +28,12 @@ PATTERNS = [
 def main():
     width = int(os.environ.get("DISPLAY_WIDTH", "144"))
     height = int(os.environ.get("DISPLAY_HEIGHT", "168"))
-    invert = os.environ.get("DISPLAY_INVERT", "").lower() in ("1", "true", "yes")
+    invert = display_invert()
 
     print(f"Sharp test — {width}×{height}  invert={invert}")
     print("Ctrl+C to stop. Patterns cycle every 3s.\n")
-    print("If still static, try:")
-    print("  DISPLAY_WIDTH=168 DISPLAY_HEIGHT=144 python display_test.py  # swapped")
-    print("  DISPLAY_INVERT=1 python display_test.py\n")
+    print("If colors look wrong, try:")
+    print("  DISPLAY_INVERT=0 python display_test.py\n")
 
     disp, _ = open_display()
     i = 0

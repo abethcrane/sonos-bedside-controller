@@ -10,20 +10,19 @@ import os
 import sys
 import time
 
-import board
-import busio
-import digitalio
-import adafruit_sharpmemorydisplay
 from PIL import Image, ImageDraw
+
+from sharp_hw import open_display, show_image
 
 WIDTH, HEIGHT = 144, 168
 
 
-def try_adafruit(cs_gpio: int):
-    print(f"\n=== Adafruit driver, CS=GPIO {cs_gpio} (pin { {'6': 31, '8': 24}.get(str(cs_gpio), '?')} ) ===")
-    cs = digitalio.DigitalInOut(getattr(board, f"D{cs_gpio}"))
-    spi = busio.SPI(board.SCK, MOSI=board.MOSI)
-    disp = adafruit_sharpmemorydisplay.SharpMemoryDisplay(spi, cs, WIDTH, HEIGHT)
+def try_cs(cs_gpio: int):
+    print(
+        f"\n=== CS=GPIO {cs_gpio} (pin { {'6': 31, '8': 24}.get(str(cs_gpio), '?')} ) ==="
+    )
+    os.environ["DISPLAY_CS_PIN"] = str(cs_gpio)
+    disp, invert = open_display()
 
     for name, fill in [("WHITE paper", 0), ("BLACK fill", 1), ("SPLIT half", None)]:
         print(f"  → {name} (2s)", flush=True)
@@ -33,8 +32,7 @@ def try_adafruit(cs_gpio: int):
         elif fill is None:
             d = ImageDraw.Draw(img)
             d.rectangle([(0, 0), (WIDTH // 2 - 1, HEIGHT - 1)], fill=1)
-        disp.image(img)
-        disp.show()
+        show_image(disp, img, invert=invert)
         time.sleep(2)
 
 
@@ -57,11 +55,11 @@ def main():
 
     cs = os.environ.get("DISPLAY_CS_PIN")
     if cs:
-        try_adafruit(int(cs))
+        try_cs(int(cs))
     else:
         for gpio in (6, 8):
             try:
-                try_adafruit(gpio)
+                try_cs(gpio)
             except Exception as e:
                 print(f"  ERROR: {e}")
 

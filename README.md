@@ -344,8 +344,7 @@ If still static, try on the Pi:
 ```bash
 DISPLAY_SPI_HZ=500000 python display_test.py
 DISPLAY_WIDTH=168 DISPLAY_HEIGHT=144 python display_test.py   # try swapped if portrait looks wrong
-DISPLAY_CS_ACTIVE_HIGH=0 python display_test.py
-DISPLAY_INVERT=1 python display_test.py
+DISPLAY_INVERT=0 python display_test.py   # only if white/black look reversed
 ```
 
 ---
@@ -360,5 +359,6 @@ DISPLAY_INVERT=1 python display_test.py
 | Test on Pi without encoders wired | `USE_KEYBOARD=1 python main.py` over SSH (same keys as Mac) |
 | Test keyboard with SPI enabled but no display | `SIMULATE_DISPLAY=1 USE_KEYBOARD=1 python main.py` |
 | Display static / snow | Wrong panel size? Try `DISPLAY_WIDTH=144 DISPLAY_HEIGHT=168` (1.3") or slower SPI: `DISPLAY_SPI_HZ=1000000`. Check DISP→3.3V and EMD→GND. |
+| White/black reversed | Invert is on by default; try `DISPLAY_INVERT=0` if colors look wrong |
 | Display blank | SPI enabled? `ls /dev/spidev0.0`. See [Hardware wiring → Sharp display](#sharp-memory-display--smaller-panel-250122) |
 | Can't reach `:8080` from Mac | Pi and Mac on same WiFi? Try `ping sonos-box.local` |
