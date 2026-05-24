@@ -174,7 +174,7 @@ def main():
     if USE_ENCODERS:
         # ── Pi + encoders wired ───────────────────────────────────────────
         enc_list  = Encoder(clk=17, dt=27, sw=22, on_rotate=scroll,   on_press=select)
-        enc_vol   = Encoder(clk=5,  dt=6,  sw=13, on_rotate=volume,   on_press=toggle_play_pause)
+        enc_vol   = Encoder(clk=5,  dt=26, sw=13, on_rotate=volume,   on_press=toggle_play_pause)
 
         import time
         while True:

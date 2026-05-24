@@ -63,7 +63,7 @@ Rough US-style street prices; shop around.
 | Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
 |-------------|------|-----|----------|--------------|
 | A (CLK) | White | GPIO | 5 | 29 |
-| B (DT) | Grey | GPIO | 6 | 31 |
+| B (DT) | Grey | GPIO | 26 | 37 |
 | SW | Black | GPIO | 13 | 33 |
 | C (common) | Brown | **GND** | — | 14 |
 | SW (other leg) | Brown | **GND** | — | 20 |
@@ -92,7 +92,7 @@ Wire **C** and one **SW** leg to Pi **GND**. Use male-to-female jumpers: **femal
 | CS | Green | GPIO | 6 | 31 |
 | EIN, 3v3 | — | NC | — | — |
 
-Full table in [README.md](README.md#hardware-wiring). **CS = GPIO 6 (pin 31)** per Adafruit #3502. Shares pin with encoder 2 DT — relocate encoder DT before using both.
+Full table in [README.md](README.md#hardware-wiring). Display **CS = GPIO 6 (pin 31)**. Encoder 2 **DT = GPIO 26 (pin 37)**.
 
 ### Network / config from a Mac
 

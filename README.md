@@ -243,7 +243,7 @@ Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections 
 | 1 — playlist | C (common) | Brown | **GND** | — | 6 |
 | 1 — playlist | SW (other leg) | Brown | **GND** | — | 9 |
 | 2 — volume | A (CLK) | White | GPIO | 5 | 29 |
-| 2 — volume | B (DT) | Grey | GPIO | 6 | 31 |
+| 2 — volume | B (DT) | Grey | GPIO | 26 | 37 |
 | 2 — volume | SW | Black | GPIO | 13 | 33 |
 | 2 — volume | C (common) | Brown | **GND** | — | 14 |
 | 2 — volume | SW (other leg) | Brown | **GND** | — | 20 |
@@ -292,7 +292,7 @@ Use **separate Pi pins** for each wire — e.g. two red wires to pin 1 and pin 1
 | **3v3** | Output pin — leave unconnected when powering via VIN from Pi |
 | **EIN** | NC when EMD is tied to GND |
 
-Wiring matches `controller/sharp_hw.py`. **CS must be GPIO 6 (pin 31)** per [Adafruit #3502 guide](https://learn.adafruit.com/adafruit-sharp-memory-display-breakout/python-wiring) — conflicts with encoder 2 DT; move that encoder wire before running both together.
+Wiring matches `controller/sharp_hw.py`. Display **CS = GPIO 6 (pin 31)**. Encoder 2 **DT = GPIO 26 (pin 37)** — keeps CS and DT off the same pin.
 
 #### Before first test
 

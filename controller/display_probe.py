@@ -51,7 +51,7 @@ def main():
     print("  Yellow→ DI   (pin 19 / GPIO 10)")
     print("  Green → CS   (pin 31 / GPIO 6)  ← Adafruit default, try this first")
     print()
-    print("Unplug encoder 2 DT (grey) from pin 31 if it's there — CS shares GPIO 6.")
+    print("Unplug encoder 2 DT (grey) from pin 31 — that pin is display CS.")
     print("Check the flat flex cable is seated in the breakout FPC connector.")
     print()
 
