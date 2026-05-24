@@ -257,9 +257,9 @@ Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections 
 
 Requires `pigpiod` running (`sudo systemctl start pigpiod`).
 
-### Sharp memory display — smaller panel (250×122)
+### Sharp memory display — Adafruit #3502 (1.3" 144×168)
 
-Typical dev panel: **2.13" Sharp memory display, 250×122 pixels** (Adafruit-style SPI breakout). Planned upgrade: **2.7" #4694** (400×240).
+**Your panel:** [Adafruit #3502](https://www.adafruit.com/product/3502) — 144×168 portrait monochrome Sharp memory display. Planned upgrade: 2.7" **#4694** (400×240).
 
 Your breakout silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 · VIN**
 
@@ -302,7 +302,7 @@ Wiring matches `controller/display.py` (`board.SCK`, `board.MOSI`, `board.D8` fo
 
 #### Resolution in code
 
-`display.py` defaults to **250×122** (2.13" panel). For the 2.7" **#4694** (400×240), run with:
+Defaults to **144×168** (#3502). For the 2.7" **#4694** (400×240):
 
 ```bash
 DISPLAY_WIDTH=400 DISPLAY_HEIGHT=240 python main.py
@@ -324,7 +324,7 @@ Hold the board still — friction-fit connections pop out easily. Promote to bre
 | Startup message | Meaning |
 |-----------------|---------|
 | `[display] Simulated display ready` | SPI not enabled or display not detected — still using terminal output |
-| `[display] Sharp 250×122 ready` | Hardware display path active |
+| `[display] Sharp 144×168 ready` | Hardware display path active |
 | Blank panel | Re-seat jumpers; check VIN, DISP, GND, EMD, CLK, DI, CS |
 | Static / snow | Run the pattern test (below) |
 
@@ -342,8 +342,7 @@ If still static, try on the Pi:
 
 ```bash
 DISPLAY_SPI_HZ=500000 python display_test.py
-DISPLAY_WIDTH=122 DISPLAY_HEIGHT=250 python display_test.py   # swapped orientation
-DISPLAY_WIDTH=144 DISPLAY_HEIGHT=168 python display_test.py # 1.3" panel
+DISPLAY_WIDTH=168 DISPLAY_HEIGHT=144 python display_test.py   # try swapped if portrait looks wrong
 DISPLAY_CS_ACTIVE_HIGH=0 python display_test.py
 DISPLAY_INVERT=1 python display_test.py
 ```

@@ -10,8 +10,8 @@ SIMULATE = (
     or os.environ.get("SIMULATE_DISPLAY", "").lower() in ("1", "true", "yes")
 )
 
-DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", "250"))
-DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "122"))
+DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", "144"))
+DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "168"))
 
 SIM_HELP = """  Controls
   j = down   k = up   enter = select   space = play/pause
@@ -68,23 +68,23 @@ class Display:
         w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
         img = Image.new("1", (w, h), 0)
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
-        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10)
 
         draw.text((4, 2), header, font=font, fill=1)
-        draw.line([(0, 16), (w - 1, 16)], fill=1, width=1)
+        draw.line([(0, 14), (w - 1, 14)], fill=1, width=1)
 
-        line_h = 16
-        max_visible = max(1, (h - 20) // line_h)
+        line_h = 14
+        max_visible = max(1, (h - 18) // line_h)
         start = max(0, min(selected_index - max_visible // 2, len(items) - max_visible))
         visible = items[start : start + max_visible]
 
         for i, item in enumerate(visible):
             idx = start + i
-            y = 20 + i * line_h
+            y = 18 + i * line_h
             name = item["name"]
-            if len(name) > 28:
-                name = name[:27] + "…"
+            if len(name) > 16:
+                name = name[:15] + "…"
             if idx == selected_index:
                 draw.rectangle([(0, y - 1), (w - 1, y + line_h - 2)], fill=1)
                 draw.text((4, y), name, font=small, fill=0)

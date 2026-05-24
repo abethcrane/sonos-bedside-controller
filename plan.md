@@ -12,7 +12,7 @@ This project is already set up for:
 
 Rough US-style street prices; shop around.
 
-**Current dev setup (2026):** starting on a **Raspberry Pi Zero W v1.1** (hand) and the **smaller Sharp Memory Display** (2.7" **#4694** is often OOS — the compact panels are typically lower resolution, e.g. **2.13" 250×122** or **1.3"** class). When the panel differs from 400×240, update `SharpMemoryDisplay(..., width, height)` and the PIL buffer size in `controller/display.py` to match. **Planned target** once parts are available: Zero 2 WH + 2.7" #4694.
+**Current dev setup (2026):** Pi Zero W v1.1 + **Adafruit Sharp #3502** (1.3" 144×168). **Target:** Pi Zero 2 WH + Sharp #4694 (2.7" 400×240).
 
 | Part | Source | ~Price |
 |------|--------|--------|

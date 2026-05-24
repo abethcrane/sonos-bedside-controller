@@ -76,8 +76,8 @@ class SharpDisplay:
 
 
 def open_display():
-    width = int(os.environ.get("DISPLAY_WIDTH", "250"))
-    height = int(os.environ.get("DISPLAY_HEIGHT", "122"))
+    width = int(os.environ.get("DISPLAY_WIDTH", "144"))
+    height = int(os.environ.get("DISPLAY_HEIGHT", "168"))
     hz = int(os.environ.get("DISPLAY_SPI_HZ", "2000000"))
     cs_high = os.environ.get("DISPLAY_CS_ACTIVE_HIGH", "1").lower() not in ("0", "false", "no")
     invert = os.environ.get("DISPLAY_INVERT", "").lower() in ("1", "true", "yes")
