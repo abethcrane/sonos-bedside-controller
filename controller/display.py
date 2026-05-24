@@ -18,8 +18,52 @@ SIM_HELP = """  Controls
   + = vol+   - = vol-   q or ^C = quit"""
 
 if not SIMULATE:
-    import board, busio, digitalio, adafruit_sharpmemorydisplay
+    import adafruit_framebuf
+    import adafruit_sharpmemorydisplay
+    import board
+    import busio
+    import digitalio
+    from adafruit_bus_device.spi_device import SPIDevice
     from PIL import Image, ImageDraw, ImageFont
+
+    _SHARPMEM_BIT_WRITECMD = 0x80
+    _SHARPMEM_BIT_VCOM = 0x40
+    _reverse_bit = adafruit_sharpmemorydisplay.reverse_bit
+
+    class SharpMemoryDisplay(adafruit_sharpmemorydisplay.SharpMemoryDisplay):
+        """Adafruit driver with correct byte stride when width is not divisible by 8 (e.g. 250)."""
+
+        def __init__(self, spi, scs_pin, width, height, *, baudrate=2000000):
+            scs_pin.switch_to_output(value=True)
+            self.spi_device = SPIDevice(spi, scs_pin, cs_active_value=True, baudrate=baudrate)
+            self._buf = bytearray(1)
+            stride = (width + 7) // 8
+            self.buffer = bytearray(stride * height)
+            adafruit_framebuf.FrameBuffer.__init__(
+                self, self.buffer, width, height, buf_format=adafruit_framebuf.MHMSB
+            )
+            self._vcom = True
+
+        def show(self) -> None:
+            line_len = (self.width + 7) // 8
+            with self.spi_device as spi:
+                image_buffer = bytearray()
+                self._buf[0] = _SHARPMEM_BIT_WRITECMD
+                if self._vcom:
+                    self._buf[0] |= _SHARPMEM_BIT_VCOM
+                self._vcom = not self._vcom
+                image_buffer.extend(self._buf)
+
+                slice_from = 0
+                for line in range(self.height):
+                    self._buf[0] = _reverse_bit(line + 1)
+                    image_buffer.extend(self._buf)
+                    image_buffer.extend(self.buffer[slice_from : slice_from + line_len])
+                    slice_from += line_len
+                self._buf[0] = 0
+                image_buffer.extend(self._buf)
+                image_buffer.extend(self._buf)
+                spi.write(image_buffer)
 
 _SIM_HISTORY_MAX = 30
 
@@ -35,9 +79,7 @@ class Display:
             self._sim_lock = None
             spi = busio.SPI(board.SCK, MOSI=board.MOSI)
             cs = digitalio.DigitalInOut(board.D8)
-            self.disp = adafruit_sharpmemorydisplay.SharpMemoryDisplay(
-                spi, cs, DISPLAY_WIDTH, DISPLAY_HEIGHT
-            )
+            self.disp = SharpMemoryDisplay(spi, cs, DISPLAY_WIDTH, DISPLAY_HEIGHT)
             print(f"[display] Sharp {DISPLAY_WIDTH}×{DISPLAY_HEIGHT} ready")
 
     def sim_log(self, line: str):
@@ -66,17 +108,17 @@ class Display:
                 print(f"{prefix}{item['name']}")
             return
 
-        # Real display rendering on Pi
-        img = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT), 1)
+        w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
+        img = Image.new("1", (w, h), 1)
         draw = ImageDraw.Draw(img)
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
         small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
 
         draw.text((4, 2), header, font=font, fill=0)
-        draw.line([(0, 16), (DISPLAY_WIDTH, 16)], fill=0, width=1)
+        draw.line([(0, 16), (w - 1, 16)], fill=0, width=1)
 
         line_h = 16
-        max_visible = (DISPLAY_HEIGHT - 20) // line_h
+        max_visible = (h - 20) // line_h
         start = max(0, min(selected_index - max_visible // 2, len(items) - max_visible))
         visible = items[start : start + max_visible]
 
@@ -87,7 +129,7 @@ class Display:
             if len(name) > 28:
                 name = name[:27] + "…"
             if idx == selected_index:
-                draw.rectangle([(0, y - 1), (DISPLAY_WIDTH, y + line_h - 2)], fill=0)
+                draw.rectangle([(0, y - 1), (w - 1, y + line_h - 2)], fill=0)
                 draw.text((4, y), name, font=small, fill=1)
             else:
                 draw.text((4, y), name, font=small, fill=0)
