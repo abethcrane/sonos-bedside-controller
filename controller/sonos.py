@@ -78,7 +78,7 @@ def get_playlists(household_id):
 
 def load_playlist(group_id, playlist_id):
     _post(f"/groups/{group_id}/playlists",
-          {"playlistId": playlist_id, "playOnCompletion": True})
+          {"playlistId": playlist_id, "playOnCompletion": True, "action": "REPLACE"})
 
 def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
@@ -93,4 +93,4 @@ def get_favorites(household_id):
 
 def load_favorite(group_id, favorite_id):
     _post(f"/groups/{group_id}/favorites",
-          {"favoriteId": favorite_id, "playOnCompletion": True})
+          {"favoriteId": favorite_id, "playOnCompletion": True, "action": "REPLACE"})

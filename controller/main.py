@@ -105,7 +105,7 @@ def select():
             print(f"Item '{item['name']}' not found on Sonos — skipping")
         display.render_list(ordered, selected)
         return
-    display.sim_log(f"load → {item['name']} ({item['type']})")
+    display.sim_log(f"load → {item['name']} ({item['type']} id={item['id']})")
     if item["type"] == "playlist":
         load_playlist(group_id, item["id"])
     elif item["type"] == "favorite":
@@ -123,13 +123,18 @@ def toggle_play_pause():
     display.render_list(ordered, selected)
 
 # ── config reload (called from Flask /reload endpoint) ───────────────────────
-def do_reload(playlists_by_id, favorites_by_id):
-    global ordered, selected
+def do_reload():
+    global ordered, selected, hh_id, group_id
+    print("Reloading config from Sonos...")
+    hh_id, group_id = get_household_and_group()
+    playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
+    favorites_by_id = {f["id"]: f for f in get_favorites(hh_id)}
     config = load_config()
     ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id)
     selected = min(selected, max(0, len(ordered) - 1))
     display.sim_log("config reloaded")
     display.render_list(ordered, selected)
+    return playlists_by_id, favorites_by_id
 
 # ── keyboard input (Mac simulation) ──────────────────────────────────────────
 KEYS = {
@@ -187,14 +192,14 @@ def main():
             import time
             while True:
                 if should_reload():
-                    do_reload(playlists_by_id, favorites_by_id)
+                    playlists_by_id, favorites_by_id = do_reload()
                 time.sleep(0.05)
 
         else:
             # ── Mac, or Pi with USE_KEYBOARD=1 (no encoders yet) ──────────────
             while True:
                 if should_reload():
-                    do_reload(playlists_by_id, favorites_by_id)
+                    playlists_by_id, favorites_by_id = do_reload()
                 ch = read_key()
                 # setraw() clears ISIG — Ctrl+C is \x03 bytes, not SIGINT
                 if ch in ("q", "\x03", "\x04"):
