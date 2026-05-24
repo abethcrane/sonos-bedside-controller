@@ -324,8 +324,29 @@ Hold the board still — friction-fit connections pop out easily. Promote to bre
 | Startup message | Meaning |
 |-----------------|---------|
 | `[display] Simulated display ready` | SPI not enabled or display not detected — still using terminal output |
-| *(no simulated message)* | Hardware display path active |
+| `[display] Sharp 250×122 ready` | Hardware display path active |
 | Blank panel | Re-seat jumpers; check VIN, DISP, GND, EMD, CLK, DI, CS |
+| Static / snow | Run the pattern test (below) |
+
+#### Display pattern test (diagnose static)
+
+```bash
+sudo systemctl stop sonos
+cd ~/sonos-bedside-controller/controller
+python display_test.py
+```
+
+Cycles blank → solid fill → border → stripes → text every 3s. Terminal prints which pattern is active — tell which (if any) looks correct.
+
+If still static, try on the Pi:
+
+```bash
+DISPLAY_SPI_HZ=500000 python display_test.py
+DISPLAY_WIDTH=122 DISPLAY_HEIGHT=250 python display_test.py   # swapped orientation
+DISPLAY_WIDTH=144 DISPLAY_HEIGHT=168 python display_test.py # 1.3" panel
+DISPLAY_CS_ACTIVE_HIGH=0 python display_test.py
+DISPLAY_INVERT=1 python display_test.py
+```
 
 ---
 
