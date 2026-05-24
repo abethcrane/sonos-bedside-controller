@@ -46,7 +46,7 @@ def main():
     print()
     print("WIRING CHECK (power off while plugging):")
     print("  Red   → VIN (pin 1)  AND  DISP (pin 17)   ← both must be 3.3V")
-    print("  Blue  → GND (pin 25) AND  EMD (pin 30)    ← both must be GND")
+    print("  Blue  → GND (pin 25) AND  EMD (pin 20)    ← both must be GND")
     print("  Orange→ CLK  (pin 23 / GPIO 11)")
     print("  Yellow→ DI   (pin 19 / GPIO 10)")
     print("  Green → CS   (pin 31 / GPIO 6)  ← Adafruit default, try this first")

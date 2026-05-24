@@ -224,7 +224,8 @@ Full encoder details (5-pin layout, dupont tips) are in [`plan.md`](plan.md). GP
 | White | Encoder CLK |
 | Grey | Encoder DT |
 | Black | Encoder SW |
-| Brown | Encoder ground |
+| Brown | Encoder 1 ground |
+| Purple | Encoder 2 ground |
 | Blue | Display ground (GND, EMD) |
 | Red | Power / 3.3V (display VIN, DISP) |
 | Orange | Display CLK |
@@ -233,7 +234,7 @@ Full encoder details (5-pin layout, dupont tips) are in [`plan.md`](plan.md). GP
 
 ### Rotary encoders
 
-Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections to GND** (pin **C** and one **SW** leg). Same wire colors for both encoders.
+Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections to GND** (pin **C** and one **SW** leg). Encoder 1 uses **brown** for GND; encoder 2 uses **purple**.
 
 | Encoder | Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
 |---------|-------------|------|-----|----------|--------------|
@@ -245,14 +246,14 @@ Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections 
 | 2 — volume | A (CLK) | White | GPIO | 5 | 29 |
 | 2 — volume | B (DT) | Grey | GPIO | 26 | 37 |
 | 2 — volume | SW | Black | GPIO | 13 | 33 |
-| 2 — volume | C (common) | Brown | **GND** | — | 14 |
-| 2 — volume | SW (other leg) | Brown | **GND** | — | 20 |
+| 2 — volume | C (common) | Purple | **GND** | — | 34 |
+| 2 — volume | SW (other leg) | Purple | **GND** | — | 39 |
 
 *(GND physical pins are interchangeable — any Pi GND pin works.)*
 
 ```
-[ A ] [ C ] [ B ]     ← A=CLK (white), B=DT (grey), C=GND (brown)
-   [ SW ] [ SW ]       ← one SW → GPIO (black), other SW → GND (brown)
+[ A ] [ C ] [ B ]     ← A=CLK (white), B=DT (grey), C=GND (brown on enc 1, purple on enc 2)
+   [ SW ] [ SW ]       ← one SW → GPIO (black), other SW → GND (same color as C)
 ```
 
 Requires `pigpiod` running (`sudo systemctl start pigpiod`).
@@ -270,14 +271,14 @@ Your breakout silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 
 | **VIN** | Red | 3.3V | — | 1 |
 | **DISP** | Red | 3.3V *(display on)* | — | 17 |
 | **GND** | Blue | Ground | — | 25 |
-| **EMD** | Blue | Ground *(required)* | — | 30 |
+| **EMD** | Blue | Ground *(required)* | — | 20 |
 | **CLK** | Orange | SPI clock | 11 | 23 |
 | **DI** | Yellow | SPI MOSI | 10 | 19 |
 | **CS** | Green | Chip select | 6 | 31 |
 | **3v3** | — | *(leave unconnected)* | — | — |
 | **EIN** | — | *(leave unconnected)* | — | — |
 
-Use **separate Pi pins** for each wire — e.g. two red wires to pin 1 and pin 17 (both 3.3V), two blue wires to pin 25 and pin 30 (both GND). Same voltage, different holes.
+Use **separate Pi pins** for each wire — e.g. two red wires to pin 1 and pin 17 (both 3.3V), two blue wires to pin 20 and pin 25 (both GND). Same voltage, different holes.
 
 **Power:** Use **VIN → Pi 3.3V** (not 5V on a Pi). Do **not** tie both VIN and 3v3 to the Pi — **3v3** is an *output* from the breakout regulator when fed from 5V; on the Pi you feed **VIN** only.
 

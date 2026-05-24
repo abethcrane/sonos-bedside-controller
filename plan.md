@@ -46,7 +46,7 @@ Rough US-style street prices; shop around.
 
 ### Pi ↔ peripherals wiring (matches `controller/main.py`)
 
-**Wire colors:** white CLK · grey DT · black SW · brown encoder GND · blue display GND · red 3.3V · orange display CLK · yellow display DI · green display CS
+**Wire colors:** white CLK · grey DT · black SW · brown encoder 1 GND · purple encoder 2 GND · blue display GND · red 3.3V · orange display CLK · yellow display DI · green display CS
 
 **Encoder 1 — playlist scroll + select**
 
@@ -65,8 +65,8 @@ Rough US-style street prices; shop around.
 | A (CLK) | White | GPIO | 5 | 29 |
 | B (DT) | Grey | GPIO | 26 | 37 |
 | SW | Black | GPIO | 13 | 33 |
-| C (common) | Brown | **GND** | — | 14 |
-| SW (other leg) | Brown | **GND** | — | 20 |
+| C (common) | Purple | **GND** | — | 34 |
+| SW (other leg) | Purple | **GND** | — | 39 |
 
 **GPIO vs physical header pins** — code uses **BCM GPIO numbers**, not physical pin positions. See [pinout.xyz](https://pinout.xyz/) for the full map.
 
@@ -86,7 +86,7 @@ Wire **C** and one **SW** leg to Pi **GND**. Use male-to-female jumpers: **femal
 | VIN | Red | 3.3V | — | 1 |
 | DISP | Red | 3.3V | — | 17 |
 | GND | Blue | GND | — | 25 |
-| EMD | Blue | GND | — | 30 |
+| EMD | Blue | GND | — | 20 |
 | CLK | Orange | GPIO | 11 | 23 |
 | DI | Yellow | GPIO | 10 | 19 |
 | CS | Green | GPIO | 6 | 31 |
