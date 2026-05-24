@@ -5,6 +5,19 @@ from sonos_credentials import CLIENT_ID, CLIENT_SECRET
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "tokens.json")
 BASE          = "https://api.ws.sonos.com/control/api/v1"
 
+
+class SonosError(RuntimeError):
+    def __init__(self, status, error_code, reason):
+        self.status = status
+        self.error_code = error_code
+        self.reason = reason
+        super().__init__(f"{error_code}: {reason}")
+
+
+def favorite_unsupported(fav):
+    """Local library favorites can't be loaded via the cloud Control API."""
+    return fav.get("description") == "From Music Library"
+
 def _load_tokens():
     with open(TOKEN_FILE) as f:
         return json.load(f)
@@ -65,6 +78,20 @@ def _post(path, body=None):
         )
     return resp
 
+
+def _check_response(resp):
+    if resp.status_code < 400:
+        return resp
+    try:
+        data = resp.json()
+        code = data.get("errorCode", f"HTTP_{resp.status_code}")
+        reason = data.get("reason", resp.text)
+    except Exception:
+        code = f"HTTP_{resp.status_code}"
+        reason = resp.text
+    raise SonosError(resp.status_code, code, reason)
+
+
 def get_household_and_group():
     """Returns (household_id, group_id) for your first household."""
     households = _get("/households")["households"]
@@ -77,8 +104,9 @@ def get_playlists(household_id):
     return _get(f"/households/{household_id}/playlists")["playlists"]
 
 def load_playlist(group_id, playlist_id):
-    _post(f"/groups/{group_id}/playlists",
-          {"playlistId": playlist_id, "playOnCompletion": True, "action": "REPLACE"})
+    resp = _post(f"/groups/{group_id}/playlists",
+                 {"playlistId": playlist_id, "playOnCompletion": True, "action": "REPLACE"})
+    _check_response(resp)
 
 def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
@@ -92,5 +120,6 @@ def get_favorites(household_id):
     return _get(f"/households/{household_id}/favorites")["items"]
 
 def load_favorite(group_id, favorite_id):
-    _post(f"/groups/{group_id}/favorites",
-          {"favoriteId": favorite_id, "playOnCompletion": True, "action": "REPLACE"})
+    resp = _post(f"/groups/{group_id}/favorites",
+                 {"favoriteId": favorite_id, "playOnCompletion": True, "action": "REPLACE"})
+    _check_response(resp)

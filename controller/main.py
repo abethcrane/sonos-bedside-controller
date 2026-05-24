@@ -14,6 +14,8 @@ USE_ENCODERS = ON_PI and os.environ.get("USE_KEYBOARD", "").lower() not in ("1",
 
 # ── local imports ─────────────────────────────────────────────────────────────
 from sonos import (
+    SonosError,
+    favorite_unsupported,
     get_household_and_group,
     get_playlists,
     get_favorites,
@@ -52,8 +54,13 @@ def resolve_items(config_items, playlists_by_id, favorites_by_id):
             name = label or playlists_by_id[item_id]["name"]
             resolved.append({"id": item_id, "type": "playlist", "name": name})
         elif item_type == "favorite" and item_id in favorites_by_id:
-            name = label or favorites_by_id[item_id]["name"]
-            resolved.append({"id": item_id, "type": "favorite", "name": name})
+            fav = favorites_by_id[item_id]
+            name = label or fav["name"]
+            item = {"id": item_id, "type": "favorite", "name": name}
+            if favorite_unsupported(fav):
+                item["unsupported"] = True
+                item["name"] = f"[local] {name}"
+            resolved.append(item)
         else:
             # item not found on Sonos — show it greyed out so you notice
             name = label or f"[missing] {item_id[:8]}"
@@ -105,11 +112,21 @@ def select():
             print(f"Item '{item['name']}' not found on Sonos — skipping")
         display.render_list(ordered, selected)
         return
+    if item.get("unsupported"):
+        display.sim_log(f"skip (local library): {item['name']}")
+        if ON_PI:
+            print(f"Item '{item['name']}' is local library — Sonos API can't load it")
+        display.render_list(ordered, selected)
+        return
     display.sim_log(f"load → {item['name']} ({item['type']} id={item['id']})")
-    if item["type"] == "playlist":
-        load_playlist(group_id, item["id"])
-    elif item["type"] == "favorite":
-        load_favorite(group_id, item["id"])
+    try:
+        if item["type"] == "playlist":
+            load_playlist(group_id, item["id"])
+        elif item["type"] == "favorite":
+            load_favorite(group_id, item["id"])
+    except SonosError as e:
+        display.sim_log(f"load failed: {e.reason}")
+        print(f"Sonos load failed ({e.error_code}): {e.reason}", flush=True)
     display.render_list(ordered, selected)
 
 def volume(delta):
