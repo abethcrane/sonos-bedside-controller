@@ -9,6 +9,10 @@ SIMULATE = (
     or os.environ.get("SIMULATE_DISPLAY", "").lower() in ("1", "true", "yes")
 )
 
+# Panel size — override via env for 2.7" #4694: DISPLAY_WIDTH=400 DISPLAY_HEIGHT=240
+DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", "250"))
+DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "122"))
+
 SIM_HELP = """  Controls
   j = down   k = up   enter = select   space = play/pause
   + = vol+   - = vol-   q or ^C = quit"""
@@ -32,8 +36,9 @@ class Display:
             spi = busio.SPI(board.SCK, MOSI=board.MOSI)
             cs = digitalio.DigitalInOut(board.D8)
             self.disp = adafruit_sharpmemorydisplay.SharpMemoryDisplay(
-                spi, cs, 400, 240
+                spi, cs, DISPLAY_WIDTH, DISPLAY_HEIGHT
             )
+            print(f"[display] Sharp {DISPLAY_WIDTH}×{DISPLAY_HEIGHT} ready")
 
     def sim_log(self, line: str):
         """Append one line to the Mac simulator log (no-op on hardware)."""
@@ -62,21 +67,30 @@ class Display:
             return
 
         # Real display rendering on Pi
-        img = Image.new("1", (240, 400), 1)  # portrait: swap w/h
+        img = Image.new("1", (DISPLAY_WIDTH, DISPLAY_HEIGHT), 1)
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
-        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
 
-        draw.text((8, 8), header, font=font, fill=0)
-        draw.line([(0, 32), (240, 32)], fill=0, width=1)
+        draw.text((4, 2), header, font=font, fill=0)
+        draw.line([(0, 16), (DISPLAY_WIDTH, 16)], fill=0, width=1)
 
-        for i, item in enumerate(items):
-            y = 40 + i * 24
-            if i == selected_index:
-                draw.rectangle([(0, y-2), (240, y+20)], fill=0)
-                draw.text((8, y), item["name"], font=small, fill=1)
+        line_h = 16
+        max_visible = (DISPLAY_HEIGHT - 20) // line_h
+        start = max(0, min(selected_index - max_visible // 2, len(items) - max_visible))
+        visible = items[start : start + max_visible]
+
+        for i, item in enumerate(visible):
+            idx = start + i
+            y = 20 + i * line_h
+            name = item["name"]
+            if len(name) > 28:
+                name = name[:27] + "…"
+            if idx == selected_index:
+                draw.rectangle([(0, y - 1), (DISPLAY_WIDTH, y + line_h - 2)], fill=0)
+                draw.text((4, y), name, font=small, fill=1)
             else:
-                draw.text((8, y), item["name"], font=small, fill=0)
+                draw.text((4, y), name, font=small, fill=0)
 
-        self.disp.image(img.rotate(90, expand=True))
+        self.disp.image(img)
         self.disp.show()

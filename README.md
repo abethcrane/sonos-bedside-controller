@@ -302,12 +302,11 @@ Wiring matches `controller/display.py` (`board.SCK`, `board.MOSI`, `board.D8` fo
 
 #### Resolution in code
 
-`display.py` is currently configured for **400×240** (2.7" target). For a **250×122** panel, update both:
+`display.py` defaults to **250×122** (2.13" panel). For the 2.7" **#4694** (400×240), run with:
 
-- `SharpMemoryDisplay(spi, board.D8, width, height)` — use `250, 122`
-- The PIL buffer size in `render_list()` to match
-
-Until those match your panel, wiring can be correct but the image may look wrong.
+```bash
+DISPLAY_WIDTH=400 DISPLAY_HEIGHT=240 python main.py
+```
 
 #### Bench test with dupont jumpers only
 
