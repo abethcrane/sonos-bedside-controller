@@ -213,6 +213,123 @@ Edit `controller/config.json` by hand, or use the web UI at **http://sonos-box.l
 
 ---
 
+## Hardware wiring
+
+Full encoder details (5-pin layout, dupont tips) are in [`plan.md`](plan.md). GPIO numbers below are **BCM** — see [pinout.xyz](https://pinout.xyz/) for the physical header map.
+
+**Wire colors (this build):**
+
+| Color | Use |
+|-------|-----|
+| White | Encoder CLK |
+| Grey | Encoder DT |
+| Black | Encoder SW |
+| Brown | Encoder ground |
+| Blue | Display ground (GND, EMD) |
+| Red | Power / 3.3V (display VIN, DISP) |
+| Orange | Display CLK |
+| Yellow | Display DI |
+| Green | Display CS |
+
+### Rotary encoders
+
+Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections to GND** (pin **C** and one **SW** leg). Same wire colors for both encoders.
+
+| Encoder | Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
+|---------|-------------|------|-----|----------|--------------|
+| 1 — playlist | A (CLK) | White | GPIO | 17 | 11 |
+| 1 — playlist | B (DT) | Grey | GPIO | 27 | 13 |
+| 1 — playlist | SW | Black | GPIO | 22 | 15 |
+| 1 — playlist | C (common) | Brown | **GND** | — | 6 |
+| 1 — playlist | SW (other leg) | Brown | **GND** | — | 9 |
+| 2 — volume | A (CLK) | White | GPIO | 5 | 29 |
+| 2 — volume | B (DT) | Grey | GPIO | 6 | 31 |
+| 2 — volume | SW | Black | GPIO | 13 | 33 |
+| 2 — volume | C (common) | Brown | **GND** | — | 14 |
+| 2 — volume | SW (other leg) | Brown | **GND** | — | 20 |
+
+*(GND physical pins are interchangeable — any Pi GND pin works.)*
+
+```
+[ A ] [ C ] [ B ]     ← A=CLK (white), B=DT (grey), C=GND (brown)
+   [ SW ] [ SW ]       ← one SW → GPIO (black), other SW → GND (brown)
+```
+
+Requires `pigpiod` running (`sudo systemctl start pigpiod`).
+
+### Sharp memory display — smaller panel (250×122)
+
+Typical dev panel: **2.13" Sharp memory display, 250×122 pixels** (Adafruit-style SPI breakout). Planned upgrade: **2.7" #4694** (400×240).
+
+Your breakout silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 · VIN**
+
+#### Display → Raspberry Pi
+
+| Display pin | Wire | Connect to | BCM GPIO | Physical pin |
+|-------------|------|------------|----------|--------------|
+| **VIN** | Red | 3.3V | — | 1 |
+| **DISP** | Red | 3.3V *(display on)* | — | 17 |
+| **GND** | Blue | Ground | — | 25 |
+| **EMD** | Blue | Ground *(required)* | — | 30 |
+| **CLK** | Orange | SPI clock | 11 | 23 |
+| **DI** | Yellow | SPI MOSI | 10 | 19 |
+| **CS** | Green | Chip select | 8 | 24 |
+| **3v3** | — | *(leave unconnected)* | — | — |
+| **EIN** | — | *(leave unconnected)* | — | — |
+
+Use **separate Pi pins** for each wire — e.g. two red wires to pin 1 and pin 17 (both 3.3V), two blue wires to pin 25 and pin 30 (both GND). Same voltage, different holes.
+
+**Power:** Use **VIN → Pi 3.3V** (not 5V on a Pi). Do **not** tie both VIN and 3v3 to the Pi — **3v3** is an *output* from the breakout regulator when fed from 5V; on the Pi you feed **VIN** only.
+
+**Control pins:**
+- **DISP → 3.3V** turns the panel on (blank if left floating)
+- **EMD → GND** selects software VCOM mode — required for the Adafruit driver
+- **EIN** (ExtComIn) — not connected in this mode
+
+| Not used | Notes |
+|----------|-------|
+| **MISO** | Display is write-only |
+| **3v3** | Output pin — leave unconnected when powering via VIN from Pi |
+| **EIN** | NC when EMD is tied to GND |
+
+Wiring matches `controller/display.py` (`board.SCK`, `board.MOSI`, `board.D8` for CS).
+
+#### Before first test
+
+1. Enable SPI: `sudo raspi-config` → Interface Options → SPI → Enable → reboot
+2. Confirm: `ls /dev/spidev0.0` *(must exist or the app stays in simulated/terminal mode)*
+3. Power **off** the Pi while plugging jumpers
+
+#### Resolution in code
+
+`display.py` is currently configured for **400×240** (2.7" target). For a **250×122** panel, update both:
+
+- `SharpMemoryDisplay(spi, board.D8, width, height)` — use `250, 122`
+- The PIL buffer size in `render_list()` to match
+
+Until those match your panel, wiring can be correct but the image may look wrong.
+
+#### Bench test with dupont jumpers only
+
+No solder or breadboard required for a quick test if your breakout has **through-hole pads**:
+
+| Jumper end | Goes to |
+|------------|---------|
+| **Female** | Pi header — see wire/color table above |
+| **Male** | Push into the matching hole on the display breakout |
+
+Hold the board still — friction-fit connections pop out easily. Promote to breadboard or soldered header when you're done iterating.
+
+#### How to know it's working
+
+| Startup message | Meaning |
+|-----------------|---------|
+| `[display] Simulated display ready` | SPI not enabled or display not detected — still using terminal output |
+| *(no simulated message)* | Hardware display path active |
+| Blank panel | Re-seat jumpers; check VIN, DISP, GND, EMD, CLK, DI, CS |
+
+---
+
 ## Troubleshooting
 
 | Symptom | Likely fix |
@@ -221,5 +338,6 @@ Edit `controller/config.json` by hand, or use the web UI at **http://sonos-box.l
 | `KeyError: access_token` or token refresh error | Re-run `python auth_setup.py` on your Mac, re-copy `controller/tokens.json` |
 | Encoders dead | `sudo systemctl status pigpiod` — daemon must be running |
 | Test on Pi without encoders wired | `USE_KEYBOARD=1 python main.py` over SSH (same keys as Mac) |
-| Display blank | Check SPI wiring and `raspi-config` SPI enable; see `plan.md` for GPIO pinout |
+| Test keyboard with SPI enabled but no display | `SIMULATE_DISPLAY=1 USE_KEYBOARD=1 python main.py` |
+| Display blank | SPI enabled? `ls /dev/spidev0.0`. See [Hardware wiring → Sharp display](#sharp-memory-display--smaller-panel-250122) |
 | Can't reach `:8080` from Mac | Pi and Mac on same WiFi? Try `ping sonos-box.local` |

@@ -46,23 +46,53 @@ Rough US-style street prices; shop around.
 
 ### Pi ↔ peripherals wiring (matches `controller/main.py`)
 
+**Wire colors:** white CLK · grey DT · black SW · brown encoder GND · blue display GND · red 3.3V · orange display CLK · yellow display DI · green display CS
+
 **Encoder 1 — playlist scroll + select**
 
-| Signal | GPIO (BCM) |
-|--------|------------|
-| CLK | 17 |
-| DT | 27 |
-| SW (push) | 22 |
+| Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
+|-------------|------|-----|----------|--------------|
+| A (CLK) | White | GPIO | 17 | 11 |
+| B (DT) | Grey | GPIO | 27 | 13 |
+| SW | Black | GPIO | 22 | 15 |
+| C (common) | Brown | **GND** | — | 6 |
+| SW (other leg) | Brown | **GND** | — | 9 |
 
 **Encoder 2 — volume + play/pause**
 
-| Signal | GPIO (BCM) |
-|--------|------------|
-| CLK | 5 |
-| DT | 6 |
-| SW (push) | 13 |
+| Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
+|-------------|------|-----|----------|--------------|
+| A (CLK) | White | GPIO | 5 | 29 |
+| B (DT) | Grey | GPIO | 6 | 31 |
+| SW | Black | GPIO | 13 | 33 |
+| C (common) | Brown | **GND** | — | 14 |
+| SW (other leg) | Brown | **GND** | — | 20 |
 
-**Sharp display (SPI)** — SPI0: MOSI / MISO / SCLK as per Adafruit wiring for #4694; **CS → GPIO 8**, **DC → GPIO 24**, **RST → GPIO 25** (as in your build notes). Total is on the order of **~12 low-voltage connections**; perfboard + short runs keeps it reliable inside a wood box.
+**GPIO vs physical header pins** — code uses **BCM GPIO numbers**, not physical pin positions. See [pinout.xyz](https://pinout.xyz/) for the full map.
+
+**Typical 5-pin encoder layout** (PEC11R-style — verify your part):
+
+```
+[ A ] [ C ] [ B ]     ← rotation (A=CLK, B=DT, C=GND)
+   [ SW ] [ SW ]       ← switch (one → SW GPIO, one → GND)
+```
+
+Wire **C** and one **SW** leg to Pi **GND**. Use male-to-female jumpers: **female → Pi header**, **male → breadboard** in the same row as the encoder leg.
+
+**Sharp display (SPI)** — silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 · VIN**
+
+| Display pin | Wire | Pi | BCM GPIO | Physical pin |
+|-------------|------|-----|----------|--------------|
+| VIN | Red | 3.3V | — | 1 |
+| DISP | Red | 3.3V | — | 17 |
+| GND | Blue | GND | — | 25 |
+| EMD | Blue | GND | — | 30 |
+| CLK | Orange | GPIO | 11 | 23 |
+| DI | Yellow | GPIO | 10 | 19 |
+| CS | Green | GPIO | 8 | 24 |
+| EIN, 3v3 | — | NC | — | — |
+
+Full table in [README.md](README.md#hardware-wiring). Code: `board.D8` for CS in `controller/display.py`.
 
 ### Network / config from a Mac
 
