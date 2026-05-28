@@ -46,7 +46,7 @@ Rough US-style street prices; shop around.
 
 ### Pi ↔ peripherals wiring (matches `controller/main.py`)
 
-**Wire colors:** white CLK · grey DT · black SW · brown encoder 1 GND · purple encoder 2 GND · blue display GND · red 3.3V · orange display CLK · yellow display DI · green display CS
+**Wire colors:** white CLK · grey DT · black SW · brown encoder 1 GND · purple encoder 2 GND · blue display GND · orange 3.3V · red display CLK · yellow display DI · green display CS
 
 **Encoder 1 — playlist scroll + select**
 
@@ -83,11 +83,11 @@ Wire **C** and one **SW** leg to Pi **GND**. Use male-to-female jumpers: **femal
 
 | Display pin | Wire | Pi | BCM GPIO | Physical pin |
 |-------------|------|-----|----------|--------------|
-| VIN | Red | 3.3V | — | 1 |
-| DISP | Red | 3.3V | — | 17 |
+| VIN | Orange | 3.3V | — | 1 |
+| DISP | Orange | 3.3V | — | 17 |
 | GND | Blue | GND | — | 25 |
 | EMD | Blue | GND | — | 20 |
-| CLK | Orange | GPIO | 11 | 23 |
+| CLK | Red | GPIO | 11 | 23 |
 | DI | Yellow | GPIO | 10 | 19 |
 | CS | Green | GPIO | 6 | 31 |
 | EIN, 3v3 | — | NC | — | — |

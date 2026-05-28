@@ -227,8 +227,8 @@ Full encoder details (5-pin layout, dupont tips) are in [`plan.md`](plan.md). GP
 | Brown | Encoder 1 ground |
 | Purple | Encoder 2 ground |
 | Blue | Display ground (GND, EMD) |
-| Red | Power / 3.3V (display VIN, DISP) |
-| Orange | Display CLK |
+| Orange | Power / 3.3V (display VIN, DISP) |
+| Red | Display CLK |
 | Yellow | Display DI |
 | Green | Display CS |
 
@@ -268,17 +268,17 @@ Your breakout silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 
 
 | Display pin | Wire | Connect to | BCM GPIO | Physical pin |
 |-------------|------|------------|----------|--------------|
-| **VIN** | Red | 3.3V | — | 1 |
-| **DISP** | Red | 3.3V *(display on)* | — | 17 |
+| **VIN** | Orange | 3.3V | — | 1 |
+| **DISP** | Orange | 3.3V *(display on)* | — | 17 |
 | **GND** | Blue | Ground | — | 25 |
 | **EMD** | Blue | Ground *(required)* | — | 20 |
-| **CLK** | Orange | SPI clock | 11 | 23 |
+| **CLK** | Red | SPI clock | 11 | 23 |
 | **DI** | Yellow | SPI MOSI | 10 | 19 |
 | **CS** | Green | Chip select | 6 | 31 |
 | **3v3** | — | *(leave unconnected)* | — | — |
 | **EIN** | — | *(leave unconnected)* | — | — |
 
-Use **separate Pi pins** for each wire — e.g. two red wires to pin 1 and pin 17 (both 3.3V), two blue wires to pin 20 and pin 25 (both GND). Same voltage, different holes.
+Use **separate Pi pins** for each wire — e.g. two orange wires to pin 1 and pin 17 (both 3.3V), two blue wires to pin 20 and pin 25 (both GND). Same voltage, different holes.
 
 **Power:** Use **VIN → Pi 3.3V** (not 5V on a Pi). Do **not** tie both VIN and 3v3 to the Pi — **3v3** is an *output* from the breakout regulator when fed from 5V; on the Pi you feed **VIN** only.
 
