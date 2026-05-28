@@ -19,11 +19,10 @@ Rough US-style street prices; shop around.
 | **Raspberry Pi Zero 2 W** (with **pre-soldered GPIO header** — often sold as **Zero 2 WH**) — *upgrade path when in stock* | Adafruit / Pimoroni / authorized resellers | ~$15 |
 | **Adafruit Sharp Memory Display 2.7"** 400×240 — **product #4694** specifically — *target; often OOS* | [adafruit.com](https://www.adafruit.com) | ~$25 |
 | **Smaller Sharp** (e.g. 2.13" 250×122 or 1.3" — **match Adafruit wiring guide for that SKU**) | Adafruit | ~$20–25 |
-| **Bourns PEC11R** rotary encoder **with switch** (push) ×2 | Mouser / DigiKey | ~$8 |
+| **KY-040 rotary encoder module** ×2 (breakout with CLK / DT / SW / + / GND) — e.g. [Amazon B07T3672VK](https://www.amazon.com/dp/B07T3672VK) | Amazon | ~$6 |
 | **Premium knob caps** ×2 (e.g. Nanu Arc or similar) | nanu.design / Amazon | ~$20 |
 | **MicroSD card** 16 GB+ (Class 10 / A1 fine) | Amazon | ~$8 |
 | **Power supply** — **USB-C 5 V / 2.5 A** for Zero 2 W; **Pi Zero W v1.1** uses **micro-USB** (still aim for a decent 5 V / 2+ A supply) | Amazon | ~$10 |
-| **4× 10 kΩ resistors** (pull-ups for encoder quadrature / switch if not using internal pull-ups everywhere) | Amazon / Mouser | ~$1 |
 | **Dupont jumpers** + small **perfboard** (clean wiring, not a rat’s nest in the box) | Amazon / Adafruit | ~$5 |
 
 **Electronics subtotal: ~$92**
@@ -42,42 +41,41 @@ Rough US-style street prices; shop around.
 
 1. **Pi Zero 2 W with headers** — look for **Zero 2 WH** or explicit “with header soldered” so you skip soldering the 40-pin yourself. **Pi Zero W (v1.1)** is fine to start: same 40-pin GPIO and SPI0; it is **slower** and has **512 MB RAM** — watch memory if you add heavy services. Power is **micro-USB**, not USB-C. **Headers:** a bare Zero W needs a **soldered 40-pin male header** (or buy a **v1.1 with header** if in stock and you want to skip that step — same board, convenience only).
 2. **Sharp display** — Adafruit has several Sharp panels; **#4694** is the 2.7" 400×240 **target** for this stack. Smaller panels use different resolutions and sometimes different **CS/DC/RST** pinouts — follow the **product page wiring** and align `display.py` dimensions.
-3. **Encoders** — get **PEC11R with integrated push switch** (e.g. suffixes like **-0020F-S0018** vary; on Mouser/DigiKey filter for “with switch” / pushbutton). Detents + nice knob caps = the “actuation feel” you want.
+3. **Encoders** — this build uses **KY-040 breakout modules** (PEC11R-class encoder + PCB pull-ups + push switch). Detents + nice knob caps = the “actuation feel” you want. **Do not tie module `+` to GND** — that shorts the pull-up rail and can brown out the Pi.
 
 ### Pi ↔ peripherals wiring (matches `controller/main.py`)
 
 **Wire colors:** white CLK · grey DT · black SW · brown encoder 1 GND · purple encoder 2 GND · blue display GND · orange 3.3V · red display CLK · yellow display DI · green display CS
 
+**Encoders — KY-040 breakout** ([B07T3672VK](https://www.amazon.com/dp/B07T3672VK) or equivalent). Header pins: **CLK · DT · SW · + · GND**. The push switch is wired on the PCB (one **SW** pin only — no second switch leg to Pi).
+
+**Four duponts per module:** CLK, DT, SW, GND. Leave **`+` unconnected** — `encoder.py` enables **Pi internal pull-ups** on CLK/DT/SW; works without tying `+` to 3.3V (saves header pins when the display uses pin 1 and 17). Optional: connect `+` to 3.3V if you have a spare 3.3V tap (display VIN pad, breadboard rail, etc.) — **never** connect `+` to GND.
+
+Duponts: **female → Pi header**, **male → KY-040 header holes**.
+
 **Encoder 1 — playlist scroll + select**
 
-| Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
-|-------------|------|-----|----------|--------------|
-| A (CLK) | White | GPIO | 17 | 11 |
-| B (DT) | Grey | GPIO | 27 | 13 |
+| KY-040 pin | Wire | Pi | BCM GPIO | Physical pin |
+|------------|------|-----|----------|--------------|
+| CLK | White | GPIO | 17 | 11 |
+| DT | Grey | GPIO | 27 | 13 |
 | SW | Black | GPIO | 22 | 15 |
-| C (common) | Brown | **GND** | — | 6 |
-| SW (other leg) | Brown | **GND** | — | 9 |
+| GND | Brown | **GND** | — | 6 |
+| + | — | **NC** | — | — |
 
 **Encoder 2 — volume + play/pause**
 
-| Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
-|-------------|------|-----|----------|--------------|
-| A (CLK) | White | GPIO | 5 | 29 |
-| B (DT) | Grey | GPIO | 26 | 37 |
+| KY-040 pin | Wire | Pi | BCM GPIO | Physical pin |
+|------------|------|-----|----------|--------------|
+| CLK | White | GPIO | 5 | 29 |
+| DT | Grey | GPIO | 26 | 37 |
 | SW | Black | GPIO | 13 | 33 |
-| C (common) | Purple | **GND** | — | 34 |
-| SW (other leg) | Purple | **GND** | — | 39 |
+| GND | Purple | **GND** | — | 34 |
+| + | — | **NC** | — | — |
 
 **GPIO vs physical header pins** — code uses **BCM GPIO numbers**, not physical pin positions. See [pinout.xyz](https://pinout.xyz/) for the full map.
 
-**Typical 5-pin encoder layout** (PEC11R-style — verify your part):
-
-```
-[ A ] [ C ] [ B ]     ← rotation (A=CLK, B=DT, C=GND)
-   [ SW ] [ SW ]       ← switch (one → SW GPIO, one → GND)
-```
-
-Wire **C** and one **SW** leg to Pi **GND**. Use male-to-female jumpers: **female → Pi header**, **male → breadboard** in the same row as the encoder leg.
+**Bench test:** `python encoder_probe.py` (decode) or `python encoder_probe.py --raw` on the Pi. Requires `pigpiod`.
 
 **Sharp display (SPI)** — silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 · VIN**
 
@@ -183,7 +181,7 @@ Extend `/ui` (and JSON API) the same way as playlists:
 
 | Topic | Decision |
 |-------|----------|
-| Hardware core | **Now:** Pi Zero W v1.1 + smaller Sharp; **Target:** Pi Zero 2 WH, Sharp #4694 — 2× PEC11R w/ switch, knobs, SD, supply, passives + perfboard |
+| Hardware core | **Now:** Pi Zero W v1.1 + smaller Sharp; **Target:** Pi Zero 2 WH, Sharp #4694 — 2× KY-040 modules, knobs, SD, supply, duponts |
 | Skip | **Long-press** encoder B (play/pause knob) |
 | Rooms | **Long-press** encoder A to enter room mode; **long-press A again** to exit; rotate to choose, short press to confirm |
 | Screen | Default **now playing**; playlist browse as **timeout overlay** |

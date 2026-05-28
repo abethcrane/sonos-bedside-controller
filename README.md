@@ -215,7 +215,7 @@ Edit `controller/config.json` by hand, or use the web UI at **http://sonos-box.l
 
 ## Hardware wiring
 
-Full encoder details (5-pin layout, dupont tips) are in [`plan.md`](plan.md). GPIO numbers below are **BCM** — see [pinout.xyz](https://pinout.xyz/) for the physical header map.
+Encoder wiring (KY-040 breakouts, `+` left NC) is in [`plan.md`](plan.md). GPIO numbers below are **BCM** — see [pinout.xyz](https://pinout.xyz/) for the physical header map.
 
 **Wire colors (this build):**
 
@@ -232,31 +232,38 @@ Full encoder details (5-pin layout, dupont tips) are in [`plan.md`](plan.md). GP
 | Yellow | Display DI |
 | Green | Display CS |
 
-### Rotary encoders
+### Rotary encoders — KY-040 breakout modules
 
-Each encoder needs **4 wires to the Pi** — CLK, DT, SW, and **two connections to GND** (pin **C** and one **SW** leg). Encoder 1 uses **brown** for GND; encoder 2 uses **purple**.
+**Parts:** [KY-040](https://www.amazon.com/dp/B07T3672VK) (or equivalent) — 5-pin header **CLK · DT · SW · + · GND**. Bourns PEC11R sits on the module; the PCB handles the switch and optional onboard pull-ups.
 
-| Encoder | Encoder pin | Wire | Pi | BCM GPIO | Physical pin |
-|---------|-------------|------|-----|----------|--------------|
-| 1 — playlist | A (CLK) | White | GPIO | 17 | 11 |
-| 1 — playlist | B (DT) | Grey | GPIO | 27 | 13 |
+**This build:** **4 duponts per encoder** — CLK, DT, SW, GND. Leave **`+` unconnected** (Pi internal pull-ups in `encoder.py` are enough; avoids needing a third 3.3V header pin when the display uses pins 1 and 17). **Never** tie `+` to GND.
+
+Duponts: **female → Pi header**, **male → KY-040 holes**.
+
+| Encoder | KY-040 pin | Wire | Pi | BCM GPIO | Physical pin |
+|---------|------------|------|-----|----------|--------------|
+| 1 — playlist | CLK | White | GPIO | 17 | 11 |
+| 1 — playlist | DT | Grey | GPIO | 27 | 13 |
 | 1 — playlist | SW | Black | GPIO | 22 | 15 |
-| 1 — playlist | C (common) | Brown | **GND** | — | 6 |
-| 1 — playlist | SW (other leg) | Brown | **GND** | — | 9 |
-| 2 — volume | A (CLK) | White | GPIO | 5 | 29 |
-| 2 — volume | B (DT) | Grey | GPIO | 26 | 37 |
+| 1 — playlist | GND | Brown | **GND** | — | 6 |
+| 1 — playlist | + | — | **NC** | — | — |
+| 2 — volume | CLK | White | GPIO | 5 | 29 |
+| 2 — volume | DT | Grey | GPIO | 26 | 37 |
 | 2 — volume | SW | Black | GPIO | 13 | 33 |
-| 2 — volume | C (common) | Purple | **GND** | — | 34 |
-| 2 — volume | SW (other leg) | Purple | **GND** | — | 39 |
+| 2 — volume | GND | Purple | **GND** | — | 34 |
+| 2 — volume | + | — | **NC** | — | — |
 
 *(GND physical pins are interchangeable — any Pi GND pin works.)*
 
-```
-[ A ] [ C ] [ B ]     ← A=CLK (white), B=DT (grey), C=GND (brown on enc 1, purple on enc 2)
-   [ SW ] [ SW ]       ← one SW → GPIO (black), other SW → GND (same color as C)
-```
-
 Requires `pigpiod` running (`sudo systemctl start pigpiod`).
+
+**Bench test on the Pi:**
+
+```bash
+cd controller
+python encoder_probe.py          # one line per detent
+python encoder_probe.py --raw    # CLK/DT pin levels while turning
+```
 
 ### Sharp memory display — Adafruit #3502 (1.3" 144×168)
 
@@ -355,7 +362,7 @@ DISPLAY_INVERT=0 python display_test.py   # only if white/black look reversed
 |---------|------------|
 | `Missing SONOS_CLIENT_ID` | Copy `.env` to the repo root on the Pi |
 | `KeyError: access_token` or token refresh error | Re-run `python auth_setup.py` on your Mac, re-copy `controller/tokens.json` |
-| Encoders dead | `sudo systemctl status pigpiod` — daemon must be running |
+| Encoders dead / bounce / false select | `sudo systemctl status pigpiod`; run `python encoder_probe.py`. KY-040: **GND + CLK/DT/SW only**, `+` NC, **never +→GND**. Wire encoder 2 or floating GPIO 5/26/13 can spuriously change volume/play |
 | Test on Pi without encoders wired | `USE_KEYBOARD=1 python main.py` over SSH (same keys as Mac) |
 | Test keyboard with SPI enabled but no display | `SIMULATE_DISPLAY=1 USE_KEYBOARD=1 python main.py` |
 | Display static / snow | Wrong panel size? Try `DISPLAY_WIDTH=144 DISPLAY_HEIGHT=168` (1.3") or slower SPI: `DISPLAY_SPI_HZ=1000000`. Check DISP→3.3V and EMD→GND. |

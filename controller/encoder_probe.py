@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 """
-Hardware bring-up for Bourns PEC11R rotary encoders.
+Hardware bring-up for KY-040 rotary encoder modules (PEC11R on PCB).
 
-Decode mode (default): prints +1 / -1 per detent with CLK/DT at decode time.
+Wiring: CLK, DT, SW, GND to Pi; leave module + unconnected (Pi pull-ups in code).
+Do not tie + to GND.
+
+Decode mode (default): prints +1 / -1 per detent.
 Raw mode (--raw): prints whenever CLK or DT changes — use to see if DT toggles at all.
 
 If you only ever see one direction, DT is probably stuck, floating, or on the wrong pin.
@@ -38,10 +41,10 @@ ENCODERS = [
 
 
 def wiring_banner():
-    print("Rotary encoder probe")
+    print("Rotary encoder probe (KY-040: CLK, DT, SW, GND; leave + unconnected)")
     print()
     print("Turn each knob both ways.")
-    print("Decode mode: expect +1 and -1 from each encoder.")
+    print("Decode mode: expect one +1 or -1 line per detent.")
     print("If only one direction appears, check the grey DT wire for that encoder.")
     print()
     for enc in ENCODERS:
@@ -54,6 +57,16 @@ def wiring_banner():
     print()
 
 
+# Same decode as encoder.py — one line per detent, not per CLK edge.
+_ENCODER_TRANSITIONS = (
+    0, -1, 1, 0,
+    1, 0, 0, -1,
+    -1, 0, 0, 1,
+    0, 1, -1, 0,
+)
+DETENT_PULSES = 4
+
+
 class EncoderProbe:
     def __init__(self, name, pi, clk, dt):
         self.name = name
@@ -62,21 +75,36 @@ class EncoderProbe:
         self.dt = dt
         self.plus = 0
         self.minus = 0
+        self._quad_accum = 0
 
         for pin in (clk, dt):
             pi.set_mode(pin, pigpio.INPUT)
             pi.set_pull_up_down(pin, pigpio.PUD_UP)
 
-        self._cb = pi.callback(clk, pigpio.RISING_EDGE, self._on_clk)
+        self._last_state = (pi.read(clk) << 1) | pi.read(dt)
+        self._cb_clk = pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
+        self._cb_dt = pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
 
-    def _on_clk(self, gpio, level, tick):
-        clk = self.pi.read(self.clk)
-        dt = self.pi.read(self.dt)
-        if dt == 0:
-            direction = +1
+    def _on_quad(self, gpio, level, tick):
+        state = (self.pi.read(self.clk) << 1) | self.pi.read(self.dt)
+        if state == self._last_state:
+            return
+        idx = (self._last_state << 2) | state
+        self._last_state = state
+        self._quad_accum += _ENCODER_TRANSITIONS[idx]
+        if self._quad_accum >= DETENT_PULSES:
+            self._quad_accum -= DETENT_PULSES
+            self._emit(+1, state)
+        elif self._quad_accum <= -DETENT_PULSES:
+            self._quad_accum += DETENT_PULSES
+            self._emit(-1, state)
+
+    def _emit(self, direction, state):
+        clk = state >> 1
+        dt = state & 1
+        if direction > 0:
             self.plus += 1
         else:
-            direction = -1
             self.minus += 1
         print(
             f"[{self.name}] dir={direction:+d}  CLK={clk} DT={dt}  "
@@ -85,7 +113,8 @@ class EncoderProbe:
         )
 
     def cancel(self):
-        self._cb.cancel()
+        self._cb_clk.cancel()
+        self._cb_dt.cancel()
 
     def warn_if_one_way(self):
         if self.plus and not self.minus:
