@@ -303,6 +303,13 @@ Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a P
 
 Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
 
+**Tuning detent feel** (Pi, if one notch sometimes counts as two or two as one):
+
+```bash
+ENCODER_SAME_DIR_US=3000 python main.py   # default 4000 — lower = more steps when spinning fast
+ENCODER_OPPO_DIR_US=1000 python main.py   # default 1500 — lower = snappier reverse direction
+```
+
 ### Sharp memory display — Adafruit #3502 (1.3" 144×168)
 
 **Your panel:** [Adafruit #3502](https://www.adafruit.com/product/3502) — 144×168 portrait monochrome Sharp memory display. Planned upgrade: 2.7" **#4694** (400×240).

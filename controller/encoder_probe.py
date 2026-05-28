@@ -57,7 +57,11 @@ def wiring_banner():
     print()
 
 
-from encoder import GPIO_GLITCH_FILTER_US, MIN_DETENT_EMIT_US, quadrature_tick
+from encoder import (
+    GPIO_GLITCH_FILTER_US,
+    quadrature_tick,
+    should_emit_detent,
+)
 
 
 class EncoderProbe:
@@ -70,6 +74,7 @@ class EncoderProbe:
         self.minus = 0
         self._quad_accum = 0
         self._last_emit_tick = 0
+        self._last_emit_dir = 0
 
         for pin in (clk, dt):
             pi.set_mode(pin, pigpio.INPUT)
@@ -81,17 +86,26 @@ class EncoderProbe:
         self._cb_clk = pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
         self._cb_dt = pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
 
+    def _read_quad_state(self):
+        clk1, dt1 = self.pi.read(self.clk), self.pi.read(self.dt)
+        clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
+        if clk1 != clk2 or dt1 != dt2:
+            clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
+        return (clk2 << 1) | dt2, clk2, dt2
+
     def _on_quad(self, gpio, level, tick):
-        clk = self.pi.read(self.clk)
-        dt = self.pi.read(self.dt)
+        state, clk, dt = self._read_quad_state()
         self._last_state, self._quad_accum, direction = quadrature_tick(
             self._last_state, clk, dt, self._quad_accum
         )
         if not direction:
             return
-        if tick - self._last_emit_tick < MIN_DETENT_EMIT_US:
+        if not should_emit_detent(
+            self._last_emit_tick, self._last_emit_dir, direction, tick
+        ):
             return
         self._last_emit_tick = tick
+        self._last_emit_dir = direction
         if direction > 0:
             self.plus += 1
         else:

@@ -2,6 +2,7 @@
 KY-040 rotary encoder input (pigpio GPIO callbacks).
 
 Decoding: shared quadrature_tick() — one on_rotate(+1|-1) per mechanical detent.
+Same-direction bounce is debounced separately from quick reversals (see should_emit_detent).
 Callbacks must stay fast (no SPI/HTTP); main.py updates state and runs the display loop.
 
 Button: release after hold, ignored briefly after rotation (mechanical SW bounce).
@@ -26,9 +27,10 @@ _ENCODER_TRANSITIONS = (
     0, 1, -1, 0,
 )
 DETENT_PULSES = 4
-# Ignore duplicate detent signals from contact bounce (KY-040).
-MIN_DETENT_EMIT_US = 10_000
-GPIO_GLITCH_FILTER_US = 300
+# Bounce often double-fires the same direction; fast reversals are real.
+MIN_SAME_DIR_EMIT_US = int(os.environ.get("ENCODER_SAME_DIR_US", "4000"))
+MIN_OPPO_DIR_EMIT_US = int(os.environ.get("ENCODER_OPPO_DIR_US", "1500"))
+GPIO_GLITCH_FILTER_US = int(os.environ.get("ENCODER_GLITCH_US", "300"))
 
 
 def quadrature_tick(last_state, clk_level, dt_level, accum):
@@ -48,6 +50,13 @@ def quadrature_tick(last_state, clk_level, dt_level, accum):
     return state, accum, direction
 
 
+def should_emit_detent(last_emit_tick, last_emit_dir, direction, tick):
+    """Allow quick direction reversals; collapse same-direction bounce."""
+    if direction == last_emit_dir:
+        return tick - last_emit_tick >= MIN_SAME_DIR_EMIT_US
+    return tick - last_emit_tick >= MIN_OPPO_DIR_EMIT_US
+
+
 class Encoder:
     def __init__(self, clk, dt, sw, on_rotate, on_press):
         self.clk = clk
@@ -61,6 +70,7 @@ class Encoder:
         self._quad_accum = 0
         self._last_quad_state = None
         self._last_emit_tick = 0
+        self._last_emit_dir = 0
 
         if SIMULATE:
             print(f"[encoder] Simulated — GPIO clk={clk} dt={dt} sw={sw}")
@@ -84,18 +94,30 @@ class Encoder:
         self._cb_dt = self.pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
         self._cb_sw = self.pi.callback(sw, pigpio.EITHER_EDGE, self._on_sw)
 
+    def _read_quad_state(self):
+        clk1, dt1 = self.pi.read(self.clk), self.pi.read(self.dt)
+        clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
+        if clk1 != clk2 or dt1 != dt2:
+            clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
+        return (clk2 << 1) | dt2
+
     def _on_quad(self, gpio, level, tick):
         self._last_rotate_tick = tick
-        clk = self.pi.read(self.clk)
-        dt = self.pi.read(self.dt)
+        state = self._read_quad_state()
+        clk = state >> 1
+        dt = state & 1
         self._last_quad_state, self._quad_accum, direction = quadrature_tick(
             self._last_quad_state, clk, dt, self._quad_accum
         )
-        if direction:
-            if tick - self._last_emit_tick < MIN_DETENT_EMIT_US:
-                return
-            self._last_emit_tick = tick
-            self.on_rotate(direction)
+        if not direction:
+            return
+        if not should_emit_detent(
+            self._last_emit_tick, self._last_emit_dir, direction, tick
+        ):
+            return
+        self._last_emit_tick = tick
+        self._last_emit_dir = direction
+        self.on_rotate(direction)
 
     def _on_sw(self, gpio, level, tick):
         if level == 0:
