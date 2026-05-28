@@ -130,7 +130,7 @@ def select():
     display.render_list(ordered, selected)
 
 def volume(delta):
-    display.sim_log("vol +" if delta > 0 else "vol −")
+    display.sim_log(f"vol {'+' if delta > 0 else '−'} (Δ{delta * 2}%)")
     set_volume(group_id, delta)
     display.render_list(ordered, selected)
 

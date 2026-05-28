@@ -12,7 +12,7 @@ DEBOUNCE_US = 250_000
 # KY-040 often shorts SW while spinning — require stillness after last detent.
 ROTATE_QUIET_BEFORE_PRESS_US = 300_000
 # Ignore tap glitches / detent chatter shorter than this.
-MIN_PRESS_HOLD_US = 30_000
+MIN_PRESS_HOLD_US = 50_000
 
 # Full quadrature state machine — one detent = 4 valid transitions (not per CLK edge).
 _ENCODER_TRANSITIONS = (
@@ -58,6 +58,8 @@ class Encoder:
         self._cb_sw = self.pi.callback(sw, pigpio.EITHER_EDGE, self._on_sw)
 
     def _on_quad(self, gpio, level, tick):
+        # Any CLK/DT edge = knob in motion; blocks SW chatter until fully still.
+        self._last_rotate_tick = tick
         state = (self.pi.read(self.clk) << 1) | self.pi.read(self.dt)
         if state == self._last_quad_state:
             return
@@ -66,14 +68,10 @@ class Encoder:
         self._quad_accum += _ENCODER_TRANSITIONS[idx]
         if self._quad_accum >= DETENT_PULSES:
             self._quad_accum -= DETENT_PULSES
-            self._emit_rotate(+1, tick)
+            self.on_rotate(+1)
         elif self._quad_accum <= -DETENT_PULSES:
             self._quad_accum += DETENT_PULSES
-            self._emit_rotate(-1, tick)
-
-    def _emit_rotate(self, direction, tick):
-        self._last_rotate_tick = tick
-        self.on_rotate(direction)
+            self.on_rotate(-1)
 
     def _on_sw(self, gpio, level, tick):
         if level == 0:
