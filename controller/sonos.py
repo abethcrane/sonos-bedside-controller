@@ -4,6 +4,7 @@ from sonos_credentials import CLIENT_ID, CLIENT_SECRET
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "tokens.json")
 BASE          = "https://api.ws.sonos.com/control/api/v1"
+REQUEST_TIMEOUT = 20  # seconds — avoid hanging forever on bad WiFi/DNS
 
 
 class SonosError(RuntimeError):
@@ -37,7 +38,8 @@ def _refresh():
         data={
             "grant_type":    "refresh_token",
             "refresh_token": tokens["refresh_token"],
-        }
+        },
+        timeout=REQUEST_TIMEOUT,
     )
     new_tokens = resp.json()
     if "access_token" not in new_tokens:
@@ -52,13 +54,15 @@ def _get(path):
     tokens = _load_tokens()
     resp = requests.get(
         f"{BASE}{path}",
-        headers={"Authorization": f"Bearer {tokens['access_token']}"}
+        headers={"Authorization": f"Bearer {tokens['access_token']}"},
+        timeout=REQUEST_TIMEOUT,
     )
     if resp.status_code == 401:
         token = _refresh()
         resp = requests.get(
             f"{BASE}{path}",
-            headers={"Authorization": f"Bearer {token}"}
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=REQUEST_TIMEOUT,
         )
     return resp.json()
 
@@ -67,14 +71,16 @@ def _post(path, body=None):
     resp = requests.post(
         f"{BASE}{path}",
         headers={"Authorization": f"Bearer {tokens['access_token']}"},
-        json=body or {}
+        json=body or {},
+        timeout=REQUEST_TIMEOUT,
     )
     if resp.status_code == 401:
         token = _refresh()
         resp = requests.post(
             f"{BASE}{path}",
             headers={"Authorization": f"Bearer {token}"},
-            json=body or {}
+            json=body or {},
+            timeout=REQUEST_TIMEOUT,
         )
     return resp
 

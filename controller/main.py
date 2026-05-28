@@ -77,11 +77,14 @@ display  = Display()
 
 def fetch_sonos_data():
     global hh_id, group_id, ordered
-    print("Connecting to Sonos...")
+    print("Connecting to Sonos...", flush=True)
+    print("  households...", flush=True)
     hh_id, group_id = get_household_and_group()
-
+    print("  playlists...", flush=True)
     playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
+    print("  favorites...", flush=True)
     favorites_by_id = {f["id"]: f for f in get_favorites(hh_id)}
+    print("  done.", flush=True)
 
     config = load_config()
     ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id)
@@ -183,8 +186,12 @@ def main():
 
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
 
-    # fetch from Sonos
-    playlists_by_id, favorites_by_id = fetch_sonos_data()
+    # fetch from Sonos (runs before any GPIO / encoder setup)
+    try:
+        playlists_by_id, favorites_by_id = fetch_sonos_data()
+    except Exception as e:
+        print(f"Sonos startup failed: {e}", flush=True)
+        raise
 
     # start Flask in background
     flask_thread = threading.Thread(
