@@ -148,7 +148,7 @@ def scroll(delta):
 
 def process_encoder_ui():
     """Main-thread refresh: paint latest state; run queued button actions."""
-    global _pending_action
+    global _pending_action, _list_ui_dirty, _vol_ui_dirty
 
     list_dirty = False
     vol_dirty = False
