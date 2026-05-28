@@ -9,8 +9,10 @@ if not SIMULATE:
     import pigpio
 
 DEBOUNCE_US = 250_000
-# Ignore button edges briefly after rotation (mechanical / electrical crosstalk).
-SW_SUPPRESS_AFTER_ROTATE_US = 80_000
+# KY-040 often shorts SW while spinning — require stillness after last detent.
+ROTATE_QUIET_BEFORE_PRESS_US = 300_000
+# Ignore tap glitches / detent chatter shorter than this.
+MIN_PRESS_HOLD_US = 30_000
 
 # Full quadrature state machine — one detent = 4 valid transitions (not per CLK edge).
 _ENCODER_TRANSITIONS = (
@@ -30,7 +32,8 @@ class Encoder:
         self.on_rotate = on_rotate
         self.on_press = on_press
         self._last_sw_tick = 0
-        self._sw_suppress_until = 0
+        self._last_rotate_tick = 0
+        self._sw_down_tick = 0
         self._quad_accum = 0
         self._last_quad_state = None
 
@@ -51,8 +54,8 @@ class Encoder:
         self._last_quad_state = (self.pi.read(clk) << 1) | self.pi.read(dt)
         self._cb_clk = self.pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
         self._cb_dt = self.pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
-        # KY-040: SW shorts to GND on press — fire on falling edge, not release/noise highs.
-        self._cb_sw = self.pi.callback(sw, pigpio.FALLING_EDGE, self._on_sw)
+        # KY-040: SW → GND while held. Count a click on release after min hold + no recent spin.
+        self._cb_sw = self.pi.callback(sw, pigpio.EITHER_EDGE, self._on_sw)
 
     def _on_quad(self, gpio, level, tick):
         state = (self.pi.read(self.clk) << 1) | self.pi.read(self.dt)
@@ -69,11 +72,20 @@ class Encoder:
             self._emit_rotate(-1, tick)
 
     def _emit_rotate(self, direction, tick):
-        self._sw_suppress_until = tick + SW_SUPPRESS_AFTER_ROTATE_US
+        self._last_rotate_tick = tick
         self.on_rotate(direction)
 
     def _on_sw(self, gpio, level, tick):
-        if tick < self._sw_suppress_until:
+        if level == 0:
+            self._sw_down_tick = tick
+            return
+        if not self._sw_down_tick:
+            return
+        held_us = tick - self._sw_down_tick
+        self._sw_down_tick = 0
+        if held_us < MIN_PRESS_HOLD_US:
+            return
+        if tick - self._last_rotate_tick < ROTATE_QUIET_BEFORE_PRESS_US:
             return
         if tick - self._last_sw_tick < DEBOUNCE_US:
             return
