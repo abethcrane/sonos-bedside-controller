@@ -82,6 +82,11 @@ _vol_timer = None
 _vol_lock = threading.Lock()
 _VOL_FLUSH_S = 0.05  # batch Sonos calls — stops the post-spin volume tail
 
+# GPIO callbacks only update state (fast). Main loop paints the latest state (slow SPI).
+_input_lock = threading.Lock()
+_list_ui_dirty = False
+_vol_ui_dirty = False
+
 def fetch_sonos_data():
     global hh_id, group_id, ordered
     print("Connecting to Sonos...", flush=True)
@@ -103,7 +108,7 @@ def fetch_sonos_data():
     return playlists_by_id, favorites_by_id
 
 # ── actions ───────────────────────────────────────────────────────────────────
-def scroll(delta):
+def _apply_scroll(delta):
     global selected
     if not ordered:
         return
@@ -111,6 +116,35 @@ def scroll(delta):
     arrow = "↑" if delta < 0 else "↓"
     display.sim_log(f"{arrow} {ordered[selected]['name']}")
     display.render_list(ordered, selected)
+
+
+def scroll(delta):
+    if not USE_ENCODERS:
+        _apply_scroll(delta)
+        return
+    global selected, _list_ui_dirty
+    with _input_lock:
+        if ordered:
+            selected = (selected + delta) % len(ordered)
+            _list_ui_dirty = True
+
+
+def process_encoder_ui():
+    """Refresh loop: draw whatever selected/volume are now — never drives counting."""
+    list_dirty = False
+    vol_dirty = False
+    with _input_lock:
+        list_dirty = _list_ui_dirty
+        _list_ui_dirty = False
+        vol_dirty = _vol_ui_dirty
+        _vol_ui_dirty = False
+
+    if list_dirty and ordered:
+        display.sim_log(f"▶ {ordered[selected]['name']}")
+        display.render_list(ordered, selected)
+    elif vol_dirty:
+        display.render_volume_adjust(_vol_session_delta * 2)
+
 
 def select():
     _flush_volume()
@@ -155,10 +189,19 @@ def _flush_volume():
 
 
 def volume(delta):
-    global _vol_session_delta, _vol_pending, _vol_timer
-    _vol_session_delta += delta
-    display.render_volume_adjust(_vol_session_delta * 2)
-    with _vol_lock:
+    global _vol_session_delta, _vol_pending, _vol_timer, _vol_ui_dirty
+    if not USE_ENCODERS:
+        _vol_session_delta += delta
+        display.render_volume_adjust(_vol_session_delta * 2)
+        try:
+            set_volume(group_id, delta)
+        except Exception as e:
+            print(f"Volume failed: {e}", flush=True)
+        return
+    with _input_lock:
+        _vol_session_delta += delta
+        _vol_ui_dirty = True
+    with _vol_lock:  # Sonos API batched separately from the display refresh loop
         _vol_pending += delta
         if _vol_timer is not None:
             _vol_timer.cancel()
@@ -242,11 +285,11 @@ def main():
             enc_list  = Encoder(clk=17, dt=27, sw=22, on_rotate=scroll,   on_press=select)
             enc_vol   = Encoder(clk=5,  dt=26, sw=13, on_rotate=volume,   on_press=toggle_play_pause)
 
-            import time
             while True:
                 if should_reload():
                     playlists_by_id, favorites_by_id = do_reload()
-                time.sleep(0.05)
+                process_encoder_ui()
+                time.sleep(0.02)
 
         else:
             # ── Mac, or Pi with USE_KEYBOARD=1 (no encoders yet) ──────────────
