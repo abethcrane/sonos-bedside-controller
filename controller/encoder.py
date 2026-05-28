@@ -1,7 +1,12 @@
+"""
+KY-040 rotary encoder input (pigpio GPIO callbacks).
+
+Decoding: shared quadrature_tick() — one on_rotate(+1|-1) per mechanical detent.
+Callbacks must stay fast (no SPI/HTTP); main.py updates state and runs the display loop.
+
+Button: release after hold, ignored briefly after rotation (mechanical SW bounce).
+"""
 import os
-import sys
-import tty
-import termios
 
 SIMULATE = not os.path.exists("/dev/gpiomem")
 
@@ -108,34 +113,3 @@ class Encoder:
             return
         self._last_sw_tick = tick
         self.on_press()
-
-
-class KeyboardInput:
-    """Mac testing: j/k to scroll, enter to select, space for play/pause, +/- for volume"""
-
-    def __init__(self, on_scroll, on_select, on_playpause, on_volume):
-        self.handlers = {
-            "k": lambda: on_scroll(-1),
-            "j": lambda: on_scroll(+1),
-            "\r": on_select,
-            " ": on_playpause,
-            "+": lambda: on_volume(+1),
-            "-": lambda: on_volume(-1),
-        }
-
-    def read_key(self):
-        fd = sys.stdin.fileno()
-        old = termios.tcgetattr(fd)
-        try:
-            tty.setraw(fd)
-            ch = sys.stdin.read(1)
-        finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        return ch
-
-    def handle(self):
-        ch = self.read_key()
-        fn = self.handlers.get(ch)
-        if fn:
-            fn()
-        return ch != "q"

@@ -265,6 +265,44 @@ python encoder_probe.py          # one line per detent
 python encoder_probe.py --raw    # CLK/DT pin levels while turning
 ```
 
+### Encoder + display architecture
+
+Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a Pi Zero can take 100–500ms; doing that inside a pigpio GPIO callback blocks the next detent and it feels like “one step per revolution.” `encoder_probe.py` only prints text, so it can look fine while `main.py` did not.
+
+```
+  KY-040 detent
+       │
+       ▼
+  encoder.py (pigpio callback)     ← fast: quadrature decode, on_rotate(±1), on_press
+       │
+       ├─ rotate → scroll() / volume()   update selected or _vol_session_delta; set dirty flag
+       └─ press  → queue select / play_pause (not handled in callback)
+       │
+       ▼
+  main loop every ~20ms: process_encoder_ui()
+       ├─ if list dirty  → render_list(selected)     ← slow SPI; never affects selected
+       ├─ elif vol dirty → render_volume_adjust(...)
+       └─ run queued button action (Sonos HTTP for select / play-pause)
+       │
+       ▼
+  volume Sonos API (separate): _vol_pending batched ~50ms after last detent
+```
+
+| Piece | File | Role |
+|-------|------|------|
+| Detent decode | `encoder.py` → `quadrature_tick()` | Gray code, 1 callback event per mechanical click; bounce filter + glitch filter |
+| Input state | `main.py` `scroll()` / `volume()` | `selected` and volume counters updated under `_input_lock` |
+| Display | `main.py` `process_encoder_ui()` | Paints **latest** state; may skip frames while spinning fast — selection is still correct |
+| Bench test | `encoder_probe.py` | Same decoder as production; no display |
+
+**Rules when changing code**
+
+- Do **not** call `display.render_*` or Sonos HTTP from `encoder.py` callbacks.
+- **Do** update `selected` / volume in `scroll()` / `volume()` (cheap).
+- Button press while spinning is ignored briefly (`ROTATE_QUIET_BEFORE_PRESS_US`) so detents do not fake a click.
+
+Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
+
 ### Sharp memory display — Adafruit #3502 (1.3" 144×168)
 
 **Your panel:** [Adafruit #3502](https://www.adafruit.com/product/3502) — 144×168 portrait monochrome Sharp memory display. Planned upgrade: 2.7" **#4694** (400×240).
@@ -363,6 +401,7 @@ DISPLAY_INVERT=0 python display_test.py   # only if white/black look reversed
 | `Missing SONOS_CLIENT_ID` | Copy `.env` to the repo root on the Pi |
 | `KeyError: access_token` or token refresh error | Re-run `python auth_setup.py` on your Mac, re-copy `controller/tokens.json` |
 | Encoders dead / bounce / false select | `sudo systemctl status pigpiod`; run `python encoder_probe.py`. KY-040: **GND + CLK/DT/SW only**, `+` NC, **never +→GND**. Wire encoder 2 or floating GPIO 5/26/13 can spuriously change volume/play |
+| Probe OK but menu/volume barely moves in app | Old bug: SPI in GPIO callback. Ensure current `main.py` uses `process_encoder_ui()` — see [Encoder + display architecture](#encoder--display-architecture) |
 | Test on Pi without encoders wired | `USE_KEYBOARD=1 python main.py` over SSH (same keys as Mac) |
 | Test keyboard with SPI enabled but no display | `SIMULATE_DISPLAY=1 USE_KEYBOARD=1 python main.py` |
 | Display static / snow | Wrong panel size? Try `DISPLAY_WIDTH=144 DISPLAY_HEIGHT=168` (1.3") or slower SPI: `DISPLAY_SPI_HZ=1000000`. Check DISP→3.3V and EMD→GND. |

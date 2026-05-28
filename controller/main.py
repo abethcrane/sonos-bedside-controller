@@ -1,4 +1,15 @@
 # controller/main.py
+"""
+Sonos bedside controller main loop.
+
+Encoder architecture (Pi + USE_ENCODERS):
+  - pigpio callbacks (encoder.py): count detents, queue button presses — no SPI/HTTP.
+  - scroll()/volume(): update selected / volume state under _input_lock, set dirty flags.
+  - process_encoder_ui() (~20ms): redraw Sharp from latest state only.
+  - Sonos volume: _vol_pending batched to API on a short timer (network is slow).
+
+Keyboard/Mac path calls the same actions but renders immediately (no GPIO contention).
+"""
 
 import json
 import os
@@ -82,10 +93,11 @@ _vol_timer = None
 _vol_lock = threading.Lock()
 _VOL_FLUSH_S = 0.05  # batch Sonos calls — stops the post-spin volume tail
 
-# GPIO callbacks only update state (fast). Main loop paints the latest state (slow SPI).
+# Encoder input vs display: callbacks touch these; process_encoder_ui() does SPI.
 _input_lock = threading.Lock()
 _list_ui_dirty = False
 _vol_ui_dirty = False
+_pending_action = None  # "select" | "play_pause" | None — set from GPIO, run on main thread
 
 def fetch_sonos_data():
     global hh_id, group_id, ordered
@@ -108,45 +120,72 @@ def fetch_sonos_data():
     return playlists_by_id, favorites_by_id
 
 # ── actions ───────────────────────────────────────────────────────────────────
-def _apply_scroll(delta):
-    global selected
+def _paint_list():
     if not ordered:
+        return
+    display.sim_log(f"▶ {ordered[selected]['name']}")
+    display.render_list(ordered, selected)
+
+
+def _paint_volume():
+    display.render_volume_adjust(_vol_session_delta * 2)
+
+
+def scroll(delta):
+    global selected, _list_ui_dirty
+    if not ordered:
+        return
+    if USE_ENCODERS:
+        with _input_lock:
+            selected = (selected + delta) % len(ordered)
+            _list_ui_dirty = True
         return
     selected = (selected + delta) % len(ordered)
     arrow = "↑" if delta < 0 else "↓"
     display.sim_log(f"{arrow} {ordered[selected]['name']}")
-    display.render_list(ordered, selected)
-
-
-def scroll(delta):
-    if not USE_ENCODERS:
-        _apply_scroll(delta)
-        return
-    global selected, _list_ui_dirty
-    with _input_lock:
-        if ordered:
-            selected = (selected + delta) % len(ordered)
-            _list_ui_dirty = True
+    _paint_list()
 
 
 def process_encoder_ui():
-    """Refresh loop: draw whatever selected/volume are now — never drives counting."""
+    """Main-thread refresh: paint latest state; run queued button actions."""
+    global _pending_action
+
     list_dirty = False
     vol_dirty = False
+    action = None
     with _input_lock:
         list_dirty = _list_ui_dirty
         _list_ui_dirty = False
         vol_dirty = _vol_ui_dirty
         _vol_ui_dirty = False
+        action = _pending_action
+        _pending_action = None
 
-    if list_dirty and ordered:
-        display.sim_log(f"▶ {ordered[selected]['name']}")
-        display.render_list(ordered, selected)
+    if list_dirty:
+        _paint_list()
     elif vol_dirty:
-        display.render_volume_adjust(_vol_session_delta * 2)
+        _paint_volume()
+
+    if action == "select":
+        do_select()
+    elif action == "play_pause":
+        do_play_pause()
+
+
+def _queue_action(name):
+    global _pending_action
+    with _input_lock:
+        _pending_action = name
 
 
 def select():
+    if USE_ENCODERS:
+        _queue_action("select")
+        return
+    do_select()
+
+
+def do_select():
     _flush_volume()
     if not ordered:
         return
@@ -155,13 +194,13 @@ def select():
         display.sim_log(f"skip (missing on Sonos): {item['name']}")
         if ON_PI:
             print(f"Item '{item['name']}' not found on Sonos — skipping")
-        display.render_list(ordered, selected)
+        _paint_list()
         return
     if item.get("unsupported"):
         display.sim_log(f"skip (local library): {item['name']}")
         if ON_PI:
             print(f"Item '{item['name']}' is local library — Sonos API can't load it")
-        display.render_list(ordered, selected)
+        _paint_list()
         return
     display.sim_log(f"load → {item['name']} ({item['type']} id={item['id']})")
     try:
@@ -172,7 +211,8 @@ def select():
     except SonosError as e:
         display.sim_log(f"load failed: {e.reason}")
         print(f"Sonos load failed ({e.error_code}): {e.reason}", flush=True)
-    display.render_list(ordered, selected)
+    _paint_list()
+
 
 def _flush_volume():
     global _vol_pending, _vol_timer
@@ -192,7 +232,7 @@ def volume(delta):
     global _vol_session_delta, _vol_pending, _vol_timer, _vol_ui_dirty
     if not USE_ENCODERS:
         _vol_session_delta += delta
-        display.render_volume_adjust(_vol_session_delta * 2)
+        _paint_volume()
         try:
             set_volume(group_id, delta)
         except Exception as e:
@@ -201,7 +241,7 @@ def volume(delta):
     with _input_lock:
         _vol_session_delta += delta
         _vol_ui_dirty = True
-    with _vol_lock:  # Sonos API batched separately from the display refresh loop
+    with _vol_lock:
         _vol_pending += delta
         if _vol_timer is not None:
             _vol_timer.cancel()
@@ -209,10 +249,18 @@ def volume(delta):
         _vol_timer.daemon = True
         _vol_timer.start()
 
+
 def toggle_play_pause():
+    if USE_ENCODERS:
+        _queue_action("play_pause")
+        return
+    do_play_pause()
+
+
+def do_play_pause():
     display.sim_log("play / pause")
     play_pause(group_id)
-    display.render_list(ordered, selected)
+    _paint_list()
 
 # ── config reload (called from Flask /reload endpoint) ───────────────────────
 def do_reload():
@@ -225,7 +273,7 @@ def do_reload():
     ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id)
     selected = min(selected, max(0, len(ordered) - 1))
     display.sim_log("config reloaded")
-    display.render_list(ordered, selected)
+    _paint_list()
     return playlists_by_id, favorites_by_id
 
 # ── keyboard input (Mac simulation) ──────────────────────────────────────────
@@ -274,16 +322,18 @@ def main():
     print("Config server running on http://localhost:8080")
 
     try:
-        # initial render
-        display.render_list(ordered, selected)
+        _paint_list()
 
         if not USE_ENCODERS and sys.stdout.isatty():
             print(SIM_HELP)
 
         if USE_ENCODERS:
-            # ── Pi + encoders wired ───────────────────────────────────────────
-            enc_list  = Encoder(clk=17, dt=27, sw=22, on_rotate=scroll,   on_press=select)
-            enc_vol   = Encoder(clk=5,  dt=26, sw=13, on_rotate=volume,   on_press=toggle_play_pause)
+            enc_list = Encoder(
+                clk=17, dt=27, sw=22, on_rotate=scroll, on_press=select
+            )
+            enc_vol = Encoder(
+                clk=5, dt=26, sw=13, on_rotate=volume, on_press=toggle_play_pause
+            )
 
             while True:
                 if should_reload():

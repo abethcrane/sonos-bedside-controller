@@ -2,13 +2,13 @@
 """
 Hardware bring-up for KY-040 rotary encoder modules (PEC11R on PCB).
 
-Wiring: CLK, DT, SW, GND to Pi; leave module + unconnected (Pi pull-ups in code).
-Do not tie + to GND.
+Uses the same quadrature_tick() as encoder.py / main.py — good counts here but
+slow SPI in the app mean you must test production behavior separately.
 
-Decode mode (default): prints +1 / -1 per detent.
-Raw mode (--raw): prints whenever CLK or DT changes — use to see if DT toggles at all.
+Wiring: CLK, DT, SW, GND to Pi; leave module + unconnected. Do not tie + to GND.
 
-If you only ever see one direction, DT is probably stuck, floating, or on the wrong pin.
+Decode mode (default): one line per detent (~20 per full turn).
+Raw mode (--raw): CLK/DT levels while turning — DT must toggle with CLK.
 """
 
 import argparse
