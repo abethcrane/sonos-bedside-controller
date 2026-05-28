@@ -77,6 +77,10 @@ group_id = None
 display  = Display()
 
 _vol_session_delta = 0  # detents since last playlist view (×2 = % on screen)
+_vol_pending = 0
+_vol_timer = None
+_vol_lock = threading.Lock()
+_VOL_FLUSH_S = 0.05  # batch Sonos calls — stops the post-spin volume tail
 
 def fetch_sonos_data():
     global hh_id, group_id, ordered
@@ -109,6 +113,7 @@ def scroll(delta):
     display.render_list(ordered, selected)
 
 def select():
+    _flush_volume()
     if not ordered:
         return
     item = ordered[selected]
@@ -135,18 +140,31 @@ def select():
         print(f"Sonos load failed ({e.error_code}): {e.reason}", flush=True)
     display.render_list(ordered, selected)
 
-def _send_volume_async(delta_steps):
+def _flush_volume():
+    global _vol_pending, _vol_timer
+    with _vol_lock:
+        batch = _vol_pending
+        _vol_pending = 0
+        _vol_timer = None
+    if batch == 0:
+        return
     try:
-        set_volume(group_id, delta_steps)
+        set_volume(group_id, batch)
     except Exception as e:
         print(f"Volume failed: {e}", flush=True)
 
 
 def volume(delta):
-    global _vol_session_delta
+    global _vol_session_delta, _vol_pending, _vol_timer
     _vol_session_delta += delta
     display.render_volume_adjust(_vol_session_delta * 2)
-    threading.Thread(target=_send_volume_async, args=(delta,), daemon=True).start()
+    with _vol_lock:
+        _vol_pending += delta
+        if _vol_timer is not None:
+            _vol_timer.cancel()
+        _vol_timer = threading.Timer(_VOL_FLUSH_S, _flush_volume)
+        _vol_timer.daemon = True
+        _vol_timer.start()
 
 def toggle_play_pause():
     display.sim_log("play / pause")
