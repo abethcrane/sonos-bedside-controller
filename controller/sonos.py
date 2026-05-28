@@ -117,10 +117,10 @@ def load_playlist(group_id, playlist_id):
 def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
 
-def set_volume(group_id, delta):
-    """delta is +1 or -1 per encoder click."""
+def set_volume(group_id, delta_steps):
+    """delta_steps: signed detent count (may be >1 when spinning fast)."""
     _post(f"/groups/{group_id}/groupVolume/relative",
-          {"volumeDelta": delta * 2})  # 2% per click feels right
+          {"volumeDelta": delta_steps * 2})  # 2% per detent
 
 def get_favorites(household_id):
     return _get(f"/households/{household_id}/favorites")["items"]

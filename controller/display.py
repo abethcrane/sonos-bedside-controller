@@ -95,6 +95,26 @@ class Display:
         if sys.stdout.isatty() and items:
             print(f"[display] ▶ {items[selected_index]['name']}", flush=True)
 
+    def render_volume_adjust(self, delta_percent):
+        """Live volume feedback while turning the volume encoder."""
+        label = f"{delta_percent:+d}%"
+        if SIMULATE:
+            self.sim_log(f"vol {label}")
+            return
+
+        w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
+        img = Image.new("1", (w, h), 0)
+        draw = ImageDraw.Draw(img)
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+        big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+
+        draw.text((4, 2), "Volume", font=font, fill=1)
+        draw.line([(0, 14), (w - 1, 14)], fill=1, width=1)
+        draw.text((4, 40), label, font=big, fill=1)
+        show_image(self._disp, img, invert=self._invert)
+        if sys.stdout.isatty():
+            print(f"[display] vol {label}", flush=True)
+
     def clear(self):
         """Blank the panel (Sharp memory displays hold the last frame until updated)."""
         if SIMULATE:

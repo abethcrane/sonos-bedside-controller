@@ -4,6 +4,7 @@ import json
 import os
 import signal
 import sys
+import time
 import tty
 import termios
 import threading
@@ -75,6 +76,8 @@ hh_id    = None
 group_id = None
 display  = Display()
 
+_vol_session_delta = 0  # steps since last playlist view (for on-screen %)
+
 def fetch_sonos_data():
     global hh_id, group_id, ordered
     print("Connecting to Sonos...", flush=True)
@@ -96,11 +99,11 @@ def fetch_sonos_data():
     return playlists_by_id, favorites_by_id
 
 # ── actions ───────────────────────────────────────────────────────────────────
-def scroll(delta):
+def scroll(delta, steps=1):
     global selected
     if not ordered:
         return
-    selected = (selected + delta) % len(ordered)
+    selected = (selected + delta * steps) % len(ordered)
     arrow = "↑" if delta < 0 else "↓"
     display.sim_log(f"{arrow} {ordered[selected]['name']}")
     display.render_list(ordered, selected)
@@ -132,10 +135,21 @@ def select():
         print(f"Sonos load failed ({e.error_code}): {e.reason}", flush=True)
     display.render_list(ordered, selected)
 
-def volume(delta):
-    display.sim_log(f"vol {'+' if delta > 0 else '−'} (Δ{delta * 2}%)")
-    set_volume(group_id, delta)
-    display.render_list(ordered, selected)
+def _send_volume_async(delta_steps):
+    try:
+        set_volume(group_id, delta_steps)
+    except Exception as e:
+        print(f"Volume failed: {e}", flush=True)
+
+
+def volume(delta, steps=1):
+    global _vol_session_delta
+    delta_steps = delta * steps
+    _vol_session_delta += delta_steps
+    display.render_volume_adjust(_vol_session_delta * 2)
+    threading.Thread(
+        target=_send_volume_async, args=(delta_steps,), daemon=True
+    ).start()
 
 def toggle_play_pause():
     display.sim_log("play / pause")
