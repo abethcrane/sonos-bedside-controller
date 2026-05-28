@@ -11,9 +11,6 @@ if not SIMULATE:
 DEBOUNCE_US = 250_000
 # KY-040 often shorts SW while spinning — require stillness after last detent.
 ROTATE_QUIET_BEFORE_PRESS_US = 150_000
-# Faster than this between detents → extra steps (menu scroll / volume).
-ACCEL_FAST_US = 70_000
-ACCEL_MED_US = 140_000
 # Ignore tap glitches / detent chatter shorter than this.
 MIN_PRESS_HOLD_US = 50_000
 
@@ -36,7 +33,6 @@ class Encoder:
         self.on_press = on_press
         self._last_sw_tick = 0
         self._last_rotate_tick = 0
-        self._last_detent_tick = 0
         self._sw_down_tick = 0
         self._quad_accum = 0
         self._last_quad_state = None
@@ -72,21 +68,10 @@ class Encoder:
         self._quad_accum += _ENCODER_TRANSITIONS[idx]
         if self._quad_accum >= DETENT_PULSES:
             self._quad_accum -= DETENT_PULSES
-            self._emit_detent(+1, tick)
+            self.on_rotate(+1)
         elif self._quad_accum <= -DETENT_PULSES:
             self._quad_accum += DETENT_PULSES
-            self._emit_detent(-1, tick)
-
-    def _emit_detent(self, direction, tick):
-        steps = 1
-        if self._last_detent_tick:
-            gap = tick - self._last_detent_tick
-            if gap < ACCEL_FAST_US:
-                steps = 3
-            elif gap < ACCEL_MED_US:
-                steps = 2
-        self._last_detent_tick = tick
-        self.on_rotate(direction, steps=steps)
+            self.on_rotate(-1)
 
     def _on_sw(self, gpio, level, tick):
         if level == 0:

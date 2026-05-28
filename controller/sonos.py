@@ -118,7 +118,7 @@ def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
 
 def set_volume(group_id, delta_steps):
-    """delta_steps: signed detent count (may be >1 when spinning fast)."""
+    """delta_steps: +1 or -1 per encoder detent."""
     _post(f"/groups/{group_id}/groupVolume/relative",
           {"volumeDelta": delta_steps * 2})  # 2% per detent
 
