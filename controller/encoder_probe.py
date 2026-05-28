@@ -44,7 +44,7 @@ def wiring_banner():
     print("Rotary encoder probe (KY-040: CLK, DT, SW, GND; leave + unconnected)")
     print()
     print("Turn each knob both ways.")
-    print("Decode mode: expect one +1 or -1 line per detent.")
+    print("Decode mode: expect one line per detent (~20 per full turn on KY-040).")
     print("If only one direction appears, check the grey DT wire for that encoder.")
     print()
     for enc in ENCODERS:
@@ -57,14 +57,7 @@ def wiring_banner():
     print()
 
 
-# Same decode as encoder.py — one line per detent, not per CLK edge.
-_ENCODER_TRANSITIONS = (
-    0, -1, 1, 0,
-    1, 0, 0, -1,
-    -1, 0, 0, 1,
-    0, 1, -1, 0,
-)
-DETENT_PULSES = 4
+MIN_DETENT_INTERVAL_US = 3_000
 
 
 class EncoderProbe:
@@ -75,36 +68,26 @@ class EncoderProbe:
         self.dt = dt
         self.plus = 0
         self.minus = 0
-        self._quad_accum = 0
+        self._last_detent_tick = 0
 
         for pin in (clk, dt):
             pi.set_mode(pin, pigpio.INPUT)
             pi.set_pull_up_down(pin, pigpio.PUD_UP)
+            pi.set_glitch_filter(pin, 0)
 
-        self._last_state = (pi.read(clk) << 1) | pi.read(dt)
-        self._cb_clk = pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
-        self._cb_dt = pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
+        self._cb_clk = pi.callback(clk, pigpio.RISING_EDGE, self._on_clk)
 
-    def _on_quad(self, gpio, level, tick):
-        state = (self.pi.read(self.clk) << 1) | self.pi.read(self.dt)
-        if state == self._last_state:
+    def _on_clk(self, gpio, level, tick):
+        if tick - self._last_detent_tick < MIN_DETENT_INTERVAL_US:
             return
-        idx = (self._last_state << 2) | state
-        self._last_state = state
-        self._quad_accum += _ENCODER_TRANSITIONS[idx]
-        if self._quad_accum >= DETENT_PULSES:
-            self._quad_accum -= DETENT_PULSES
-            self._emit(+1, state)
-        elif self._quad_accum <= -DETENT_PULSES:
-            self._quad_accum += DETENT_PULSES
-            self._emit(-1, state)
-
-    def _emit(self, direction, state):
-        clk = state >> 1
-        dt = state & 1
-        if direction > 0:
+        self._last_detent_tick = tick
+        clk = self.pi.read(self.clk)
+        dt = self.pi.read(self.dt)
+        if dt == 0:
+            direction = +1
             self.plus += 1
         else:
+            direction = -1
             self.minus += 1
         print(
             f"[{self.name}] dir={direction:+d}  CLK={clk} DT={dt}  "
@@ -114,7 +97,6 @@ class EncoderProbe:
 
     def cancel(self):
         self._cb_clk.cancel()
-        self._cb_dt.cancel()
 
     def warn_if_one_way(self):
         if self.plus and not self.minus:

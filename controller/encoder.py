@@ -11,17 +11,9 @@ if not SIMULATE:
 DEBOUNCE_US = 250_000
 # KY-040 often shorts SW while spinning — require stillness after last detent.
 ROTATE_QUIET_BEFORE_PRESS_US = 150_000
-# Ignore tap glitches / detent chatter shorter than this.
 MIN_PRESS_HOLD_US = 50_000
-
-# Full quadrature state machine — one detent = 4 valid transitions (not per CLK edge).
-_ENCODER_TRANSITIONS = (
-    0, -1, 1, 0,
-    1, 0, 0, -1,
-    -1, 0, 0, 1,
-    0, 1, -1, 0,
-)
-DETENT_PULSES = 4
+# Collapse bounce / double edges on the same detent (KY-040 ≈ 20 detents/rev).
+MIN_DETENT_INTERVAL_US = 3_000
 
 
 class Encoder:
@@ -33,9 +25,8 @@ class Encoder:
         self.on_press = on_press
         self._last_sw_tick = 0
         self._last_rotate_tick = 0
+        self._last_detent_tick = 0
         self._sw_down_tick = 0
-        self._quad_accum = 0
-        self._last_quad_state = None
 
         if SIMULATE:
             print(f"[encoder] Simulated — GPIO clk={clk} dt={dt} sw={sw}")
@@ -50,27 +41,20 @@ class Encoder:
         for pin in (clk, dt, sw):
             self.pi.set_mode(pin, pigpio.INPUT)
             self.pi.set_pull_up_down(pin, pigpio.PUD_UP)
+            self.pi.set_glitch_filter(pin, 0)
 
-        self._last_quad_state = (self.pi.read(clk) << 1) | self.pi.read(dt)
-        self._cb_clk = self.pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
-        self._cb_dt = self.pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
-        # KY-040: SW → GND while held. Count a click on release after min hold + no recent spin.
+        # KY-040: one count per detent on CLK rising (DT = direction).
+        self._cb_clk = self.pi.callback(clk, pigpio.RISING_EDGE, self._on_clk)
         self._cb_sw = self.pi.callback(sw, pigpio.EITHER_EDGE, self._on_sw)
 
-    def _on_quad(self, gpio, level, tick):
-        # Any CLK/DT edge = knob in motion; blocks SW chatter until fully still.
+    def _on_clk(self, gpio, level, tick):
         self._last_rotate_tick = tick
-        state = (self.pi.read(self.clk) << 1) | self.pi.read(self.dt)
-        if state == self._last_quad_state:
+        if tick - self._last_detent_tick < MIN_DETENT_INTERVAL_US:
             return
-        idx = (self._last_quad_state << 2) | state
-        self._last_quad_state = state
-        self._quad_accum += _ENCODER_TRANSITIONS[idx]
-        if self._quad_accum >= DETENT_PULSES:
-            self._quad_accum -= DETENT_PULSES
+        self._last_detent_tick = tick
+        if self.pi.read(self.dt) == 0:
             self.on_rotate(+1)
-        elif self._quad_accum <= -DETENT_PULSES:
-            self._quad_accum += DETENT_PULSES
+        else:
             self.on_rotate(-1)
 
     def _on_sw(self, gpio, level, tick):
