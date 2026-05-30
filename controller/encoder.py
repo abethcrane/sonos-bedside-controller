@@ -29,7 +29,6 @@ _ENCODER_TRANSITIONS = (
 DETENT_PULSES = 4
 # Bounce often double-fires the same direction; fast reversals are real.
 MIN_SAME_DIR_EMIT_US = int(os.environ.get("ENCODER_SAME_DIR_US", "4000"))
-MIN_OPPO_DIR_EMIT_US = int(os.environ.get("ENCODER_OPPO_DIR_US", "1500"))
 GPIO_GLITCH_FILTER_US = int(os.environ.get("ENCODER_GLITCH_US", "300"))
 
 
@@ -51,10 +50,10 @@ def quadrature_tick(last_state, clk_level, dt_level, accum):
 
 
 def should_emit_detent(last_emit_tick, last_emit_dir, direction, tick):
-    """Allow quick direction reversals; collapse same-direction bounce."""
+    """Collapse same-direction bounce; always allow real direction reversals."""
     if direction == last_emit_dir:
         return tick - last_emit_tick >= MIN_SAME_DIR_EMIT_US
-    return tick - last_emit_tick >= MIN_OPPO_DIR_EMIT_US
+    return True
 
 
 class Encoder:

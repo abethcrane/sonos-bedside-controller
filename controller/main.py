@@ -105,11 +105,16 @@ _vol_api_inflight = False
 VOLUME_SPIN_IDLE_S = float(os.environ.get("VOLUME_SPIN_IDLE_S", "0.05"))
 VOLUME_PCT_PER_DETENT = int(os.environ.get("VOLUME_PCT_PER_DETENT", "2"))
 UI_LOOP_S = float(os.environ.get("UI_LOOP_S", "0.02"))
+# Cap Sharp playlist redraws — SPI in the main thread was starving pigpio callbacks.
+LIST_RENDER_MIN_S = float(os.environ.get("LIST_RENDER_MIN_S", "0.05"))
+LIST_RENDER_IDLE_S = float(os.environ.get("LIST_RENDER_IDLE_S", "0.04"))
 
 # Encoder input vs display: callbacks touch these; process_encoder_ui() does SPI.
 _input_lock = threading.Lock()
 _list_ui_dirty = False
 _vol_ui_dirty = False
+_scroll_last_detent_at = 0.0
+_last_list_render_at = 0.0
 _pending_action = None  # "select" | "play_pause" | None — set from GPIO, run on main thread
 
 def fetch_sonos_data():
@@ -146,15 +151,14 @@ def _paint_volume():
 
 
 def scroll(delta):
-    global selected, _list_ui_dirty
+    global selected, _list_ui_dirty, _scroll_last_detent_at
     if not ordered:
         return
     if USE_ENCODERS:
         with _input_lock:
             selected = (selected + delta) % len(ordered)
             _list_ui_dirty = True
-        arrow = "↑" if delta < 0 else "↓"
-        display.sim_log(f"{arrow} {ordered[selected]['name']}")
+        _scroll_last_detent_at = time.monotonic()
         return
     selected = (selected + delta) % len(ordered)
     arrow = "↑" if delta < 0 else "↓"
@@ -164,21 +168,28 @@ def scroll(delta):
 
 def process_encoder_ui():
     """Main-thread refresh: paint latest state; run queued button actions."""
-    global _pending_action, _list_ui_dirty, _vol_ui_dirty
+    global _pending_action, _list_ui_dirty, _vol_ui_dirty, _last_list_render_at
 
+    now = time.monotonic()
     list_dirty = False
     vol_dirty = False
     action = None
     with _input_lock:
         list_dirty = _list_ui_dirty
-        _list_ui_dirty = False
         vol_dirty = _vol_ui_dirty
         _vol_ui_dirty = False
         action = _pending_action
         _pending_action = None
 
-    if list_dirty:
-        _paint_list()
+    if list_dirty and ordered:
+        scroll_idle = now - _scroll_last_detent_at >= LIST_RENDER_IDLE_S
+        render_due = now - _last_list_render_at >= LIST_RENDER_MIN_S
+        if scroll_idle or render_due:
+            with _input_lock:
+                _list_ui_dirty = False
+            display.sim_log(f"▶ {ordered[selected]['name']}")
+            _paint_list()
+            _last_list_render_at = now
     elif vol_dirty:
         _paint_volume()
 
@@ -298,10 +309,7 @@ def volume(delta):
         _vol_ui_dirty = True
     with _vol_lock:
         _vol_pending += delta
-        pending = _vol_pending
     _vol_last_detent_at = time.monotonic()
-    session_pct = _vol_session_delta * VOLUME_PCT_PER_DETENT
-    display.sim_log(f"vol detent {delta:+d} (pending {pending:+d}, session {session_pct:+d}%)")
 
 
 def toggle_play_pause():

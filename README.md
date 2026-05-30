@@ -327,8 +327,12 @@ Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
 
 ```bash
 # Encoder counting (menu + volume GPIO)
-ENCODER_SAME_DIR_US=1500 python main.py   # default 4000 — you found ~1500 good for menu
-ENCODER_OPPO_DIR_US=1000 python main.py   # default 1500
+ENCODER_SAME_DIR_US=1500 python main.py   # default 4000 — lower = more steps when spinning fast
+# OPPO_DIR debounce removed — reversals always count immediately
+
+# Fast scroll dropping detents? SPI was blocking GPIO — cap redraw rate:
+LIST_RENDER_MIN_S=0.05 python main.py      # max ~20 playlist paints/sec while spinning
+LIST_RENDER_IDLE_S=0.04 python main.py     # always paint once after you stop
 
 # Volume only — Sonos flush waits until knob pauses (see logs: vol detent … then vol Sonos ΔN%)
 VOLUME_SPIN_IDLE_S=0.04 python main.py   # default 0.05 — pause before API batch
