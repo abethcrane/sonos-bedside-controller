@@ -364,7 +364,7 @@ def main():
     except KeyboardInterrupt:
         print("\nBye.")
     finally:
-        display.clear()
+        display.show_goodbye()
 
 if __name__ == "__main__":
     main()

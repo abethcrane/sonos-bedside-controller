@@ -72,3 +72,30 @@ def pattern_text(w, h, text="SONOS"):
     font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16)
     draw.text((4, h // 2 - 10), text, font=font, fill=1)
     return img
+
+
+def pattern_happy_face(w, h):
+    """Big smiley for shutdown — Sharp panels hold the last frame."""
+    img = Image.new("1", (w, h), 0)
+    draw = ImageDraw.Draw(img)
+    cx, cy = w // 2, h // 2
+    r = min(w, h) // 2 - 6
+    draw.ellipse([(cx - r, cy - r), (cx + r, cy + r)], outline=1, width=3)
+    eye_y = cy - r // 3
+    eye_rx, eye_ry = max(4, r // 6), max(5, r // 5)
+    eye_dx = r // 3
+    for ex in (cx - eye_dx, cx + eye_dx):
+        draw.ellipse(
+            [(ex - eye_rx, eye_y - eye_ry), (ex + eye_rx, eye_y + eye_ry)],
+            fill=1,
+        )
+    mouth_r = int(r * 0.55)
+    mouth_top = cy + r // 6
+    draw.arc(
+        [(cx - mouth_r, mouth_top), (cx + mouth_r, mouth_top + mouth_r)],
+        start=0,
+        end=180,
+        fill=1,
+        width=3,
+    )
+    return img

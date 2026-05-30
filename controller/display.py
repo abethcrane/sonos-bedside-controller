@@ -21,7 +21,7 @@ SIM_HELP = """  Controls
 if not SIMULATE:
     from PIL import Image, ImageDraw, ImageFont
 
-    from sharp_hw import open_display, pattern_blank, show_image
+    from sharp_hw import open_display, pattern_blank, pattern_happy_face, show_image
 
 _SIM_HISTORY_MAX = 30
 
@@ -239,5 +239,15 @@ class Display:
         show_image(
             self._disp,
             pattern_blank(DISPLAY_WIDTH, DISPLAY_HEIGHT),
+            invert=self._invert,
+        )
+
+    def show_goodbye(self):
+        """Happy face on exit — Sharp panels hold the last frame until updated."""
+        if SIMULATE:
+            return
+        show_image(
+            self._disp,
+            pattern_happy_face(DISPLAY_WIDTH, DISPLAY_HEIGHT),
             invert=self._invert,
         )
