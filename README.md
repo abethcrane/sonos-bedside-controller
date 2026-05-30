@@ -285,7 +285,7 @@ Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a P
        └─ run queued button action (Sonos HTTP for select / play-pause)
        │
        ▼
-  volume Sonos API (separate): _vol_pending batched ~50ms after last detent
+  volume Sonos API: detents logged immediately; API batch after knob pause (VOLUME_SPIN_IDLE_S)
 ```
 
 | Piece | File | Role |
@@ -303,11 +303,16 @@ Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a P
 
 Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
 
-**Tuning detent feel** (Pi, if one notch sometimes counts as two or two as one):
+**Tuning detent feel** (both encoders share `encoder.py`; volume *feels* different because of Sonos batching):
 
 ```bash
-ENCODER_SAME_DIR_US=3000 python main.py   # default 4000 — lower = more steps when spinning fast
-ENCODER_OPPO_DIR_US=1000 python main.py   # default 1500 — lower = snappier reverse direction
+# Encoder counting (menu + volume GPIO)
+ENCODER_SAME_DIR_US=1500 python main.py   # default 4000 — you found ~1500 good for menu
+ENCODER_OPPO_DIR_US=1000 python main.py   # default 1500
+
+# Volume only — Sonos flush waits until knob pauses (see logs: vol detent … then vol Sonos ΔN%)
+VOLUME_SPIN_IDLE_S=0.04 python main.py   # default 0.05 — pause before API batch
+VOLUME_PCT_PER_DETENT=3 python main.py    # default 2 — % per counted detent
 ```
 
 ### Sharp memory display — Adafruit #3502 (1.3" 144×168)

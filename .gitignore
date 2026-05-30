@@ -1,5 +1,6 @@
 .env
 controller/tokens.json
+controller/artist_cache.json
 
 venv/
 .venv/

@@ -6,7 +6,7 @@ Encoder architecture (Pi + USE_ENCODERS):
   - pigpio callbacks (encoder.py): count detents, queue button presses — no SPI/HTTP.
   - scroll()/volume(): update selected / volume state under _input_lock, set dirty flags.
   - process_encoder_ui() (~20ms): redraw Sharp from latest state only.
-  - Sonos volume: _vol_pending batched to API on a short timer (network is slow).
+  - Sonos volume: _vol_pending flushed on the same ~20ms loop as the display (batched API).
 
 Keyboard/Mac path calls the same actions but renders immediately (no GPIO contention).
 """
@@ -25,16 +25,20 @@ ON_PI = os.path.exists("/dev/gpiomem")
 USE_ENCODERS = ON_PI and os.environ.get("USE_KEYBOARD", "").lower() not in ("1", "true", "yes")
 
 # ── local imports ─────────────────────────────────────────────────────────────
+from artist_cache import load_artist_cache
 from sonos import (
     SonosError,
+    cache_artist_from_playback,
     display_name,
     favorite_unsupported,
     get_household_and_group,
     get_playlists,
     get_favorites,
+    item_artist_name,
     load_playlist,
     load_favorite,
     play_pause,
+    resolve_favorite_artists,
     set_volume,
 )
 from display import Display, SIM_HELP
@@ -52,11 +56,12 @@ def load_config():
     with open(CONFIG_FILE) as f:
         return json.load(f)
 
-def resolve_items(config_items, playlists_by_id, favorites_by_id):
+def resolve_items(config_items, playlists_by_id, favorites_by_id, cache=None):
     """
     Match config item IDs against what Sonos actually has.
     Falls back to the stored label if Sonos no longer has the item.
     """
+    cache = cache if cache is not None else load_artist_cache()
     resolved = []
     for entry in config_items:
         item_id = entry["id"]
@@ -65,11 +70,13 @@ def resolve_items(config_items, playlists_by_id, favorites_by_id):
 
         if item_type == "playlist" and item_id in playlists_by_id:
             pl = playlists_by_id[item_id]
-            name = display_name(pl["name"], pl.get("description"), label)
+            artist = item_artist_name(pl, cache)
+            name = display_name(pl["name"], pl.get("description"), label, artist=artist or "")
             resolved.append({"id": item_id, "type": "playlist", "name": name})
         elif item_type == "favorite" and item_id in favorites_by_id:
             fav = favorites_by_id[item_id]
-            name = display_name(fav["name"], fav.get("description"), label)
+            artist = item_artist_name(fav, cache)
+            name = display_name(fav["name"], fav.get("description"), label, artist=artist or "")
             item = {"id": item_id, "type": "favorite", "name": name}
             if favorite_unsupported(fav):
                 item["unsupported"] = True
@@ -91,9 +98,13 @@ display  = Display()
 
 _vol_session_delta = 0  # detents since last playlist view (×2 = % on screen)
 _vol_pending = 0
-_vol_timer = None
 _vol_lock = threading.Lock()
-_VOL_FLUSH_S = 0.05  # batch Sonos calls — stops the post-spin volume tail
+_vol_last_detent_at = 0.0
+_vol_api_inflight = False
+# Wait this long after the last detent before sending batched steps to Sonos.
+VOLUME_SPIN_IDLE_S = float(os.environ.get("VOLUME_SPIN_IDLE_S", "0.05"))
+VOLUME_PCT_PER_DETENT = int(os.environ.get("VOLUME_PCT_PER_DETENT", "2"))
+UI_LOOP_S = float(os.environ.get("UI_LOOP_S", "0.02"))
 
 # Encoder input vs display: callbacks touch these; process_encoder_ui() does SPI.
 _input_lock = threading.Lock()
@@ -109,11 +120,13 @@ def fetch_sonos_data():
     print("  playlists...", flush=True)
     playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
     print("  favorites...", flush=True)
-    favorites_by_id = {f["id"]: f for f in get_favorites(hh_id)}
+    favorites_list = get_favorites(hh_id)
+    cache = resolve_favorite_artists(favorites_list)
+    favorites_by_id = {f["id"]: f for f in favorites_list}
     print("  done.", flush=True)
 
     config = load_config()
-    ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id)
+    ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id, cache)
 
     if not ordered:
         print("No items in config.json yet.")
@@ -130,7 +143,7 @@ def _paint_list():
 
 
 def _paint_volume():
-    display.render_volume_adjust(_vol_session_delta * 2)
+    display.render_volume_adjust(_vol_session_delta * VOLUME_PCT_PER_DETENT)
 
 
 def scroll(delta):
@@ -168,6 +181,8 @@ def process_encoder_ui():
     elif vol_dirty:
         _paint_volume()
 
+    _flush_volume_if_due()
+
     if action == "select":
         do_select()
     elif action == "play_pause":
@@ -188,6 +203,12 @@ def select():
 
 
 def do_select():
+    # Apply any volume detents still waiting for spin-idle flush.
+    while True:
+        with _vol_lock:
+            if not _vol_api_inflight:
+                break
+        time.sleep(0.01)
     _flush_volume()
     if not ordered:
         return
@@ -210,6 +231,8 @@ def do_select():
             load_playlist(group_id, item["id"])
         elif item["type"] == "favorite":
             load_favorite(group_id, item["id"])
+            time.sleep(0.8)
+            cache_artist_from_playback(group_id, item["id"])
     except SonosError as e:
         display.sim_log(f"load failed: {e.reason}")
         print(f"Sonos load failed ({e.error_code}): {e.reason}", flush=True)
@@ -217,21 +240,50 @@ def do_select():
 
 
 def _flush_volume():
-    global _vol_pending, _vol_timer
+    """Send accumulated detents to Sonos (background thread or before select)."""
+    global _vol_pending, _vol_api_inflight
     with _vol_lock:
         batch = _vol_pending
         _vol_pending = 0
-        _vol_timer = None
+        _vol_api_inflight = False
     if batch == 0:
         return
+    pct = batch * VOLUME_PCT_PER_DETENT
+    msg = f"vol Sonos Δ{pct:+d}% ({abs(batch)} detent{'s' if abs(batch) != 1 else ''})"
+    display.sim_log(msg)
+    print(f"  {msg}", flush=True)
     try:
         set_volume(group_id, batch)
     except Exception as e:
         print(f"Volume failed: {e}", flush=True)
 
 
+def _flush_volume_async():
+    global _vol_api_inflight
+    with _vol_lock:
+        if _vol_pending == 0:
+            _vol_api_inflight = False
+            return
+    _flush_volume()
+
+
+def _flush_volume_if_due():
+    """After knob pauses, send full pending batch (not one detent mid-spin)."""
+    global _vol_api_inflight
+    now = time.monotonic()
+    with _vol_lock:
+        pending = _vol_pending
+        if pending == 0 or _vol_api_inflight:
+            return
+    if now - _vol_last_detent_at < VOLUME_SPIN_IDLE_S:
+        return
+    with _vol_lock:
+        _vol_api_inflight = True
+    threading.Thread(target=_flush_volume_async, daemon=True).start()
+
+
 def volume(delta):
-    global _vol_session_delta, _vol_pending, _vol_timer, _vol_ui_dirty
+    global _vol_session_delta, _vol_ui_dirty, _vol_pending, _vol_last_detent_at
     if not USE_ENCODERS:
         _vol_session_delta += delta
         _paint_volume()
@@ -245,11 +297,10 @@ def volume(delta):
         _vol_ui_dirty = True
     with _vol_lock:
         _vol_pending += delta
-        if _vol_timer is not None:
-            _vol_timer.cancel()
-        _vol_timer = threading.Timer(_VOL_FLUSH_S, _flush_volume)
-        _vol_timer.daemon = True
-        _vol_timer.start()
+        pending = _vol_pending
+    _vol_last_detent_at = time.monotonic()
+    session_pct = _vol_session_delta * VOLUME_PCT_PER_DETENT
+    display.sim_log(f"vol detent {delta:+d} (pending {pending:+d}, session {session_pct:+d}%)")
 
 
 def toggle_play_pause():
@@ -270,9 +321,11 @@ def do_reload():
     print("Reloading config from Sonos...")
     hh_id, group_id = get_household_and_group()
     playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
-    favorites_by_id = {f["id"]: f for f in get_favorites(hh_id)}
+    favorites_list = get_favorites(hh_id)
+    cache = resolve_favorite_artists(favorites_list)
+    favorites_by_id = {f["id"]: f for f in favorites_list}
     config = load_config()
-    ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id)
+    ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id, cache)
     selected = min(selected, max(0, len(ordered) - 1))
     display.sim_log("config reloaded")
     _paint_list()
@@ -346,7 +399,7 @@ def main():
                     items = ordered
                 if items and display.advance_marquee(sel, items):
                     _paint_list()
-                time.sleep(0.02)
+                time.sleep(UI_LOOP_S)
 
         else:
             # ── Mac, or Pi with USE_KEYBOARD=1 (no encoders yet) ──────────────

@@ -1,6 +1,7 @@
-import json, os, base64, requests
+import json, os, base64, re, requests
 
 from sonos_credentials import CLIENT_ID, CLIENT_SECRET
+from artist_cache import load_artist_cache, save_artist_cache
 
 TOKEN_FILE = os.path.join(os.path.dirname(__file__), "tokens.json")
 BASE          = "https://api.ws.sonos.com/control/api/v1"
@@ -24,30 +25,114 @@ _GENERIC_FAVORITE_NAMES = frozenset({
     "mix", "mixes", "on tour", "discover",
 })
 
+def is_useless_description(desc):
+    d = (desc or "").strip().lower()
+    if not d or d == "from music library":
+        return True
+    if d.endswith(" playlist"):
+        return True
+    return False
+
+def spotify_artist_id_from_item(item):
+    resource = item.get("resource") or {}
+    obj_id = (resource.get("id") or {}).get("objectId") or ""
+    if "spotify:" in obj_id:
+        obj_id = obj_id[obj_id.index("spotify:"):]
+    match = re.search(
+        r"spotify:artistTopTracks:([A-Za-z0-9]+)|spotify:artist:([A-Za-z0-9]+)",
+        obj_id,
+    )
+    if not match:
+        return None
+    return match.group(1) or match.group(2)
+
 def is_generic_favorite_name(name):
     n = (name or "").lower().strip()
     return n in _GENERIC_FAVORITE_NAMES or n.startswith("top track")
 
-def display_name(name, description="", label=""):
-    """Build a label from Sonos name + description (artist/context)."""
+def display_name(name, description="", label="", artist=""):
+    """Build a label from Sonos name + artist/context."""
     if label:
         return label
     name = name or ""
-    desc = (description or "").strip()
-    if not desc or desc == "From Music Library":
-        return name
-    if is_generic_favorite_name(name):
-        return desc
-    if desc.lower() in name.lower():
-        return name
-    return f"{name} · {desc}"
+    art = (artist or "").strip()
+    if not art:
+        desc = (description or "").strip()
+        if desc and not is_useless_description(desc):
+            art = desc
+    if art and is_generic_favorite_name(name):
+        return art
+    if art and art.lower() not in name.lower():
+        return f"{name} · {art}"
+    return name
 
-def sonos_item_context(item):
-    """Subtitle/context from Sonos (usually artist); None if not useful."""
+def item_artist_name(item, cache=None):
+    """Best-effort artist/context for a Sonos favorite or playlist."""
+    cache = cache if cache is not None else load_artist_cache()
+    fav_id = item.get("id")
+    if fav_id:
+        cached = cache.get("byFavoriteId", {}).get(str(fav_id))
+        if cached:
+            return cached
+
+    spotify_id = spotify_artist_id_from_item(item)
+    if spotify_id:
+        cached = cache.get("bySpotifyArtistId", {}).get(spotify_id)
+        if cached:
+            return cached
+
     desc = (item.get("description") or "").strip()
-    if not desc or desc == "From Music Library":
-        return None
-    return desc
+    if desc and not is_useless_description(desc):
+        return desc
+    return None
+
+def resolve_favorite_artists(favorites, cache=None):
+    """Fill cache from Spotify IDs embedded in Sonos favorites."""
+    from spotify import get_artists, spotify_configured
+
+    cache = cache if cache is not None else load_artist_cache()
+    by_spotify = cache.setdefault("bySpotifyArtistId", {})
+    by_fav = cache.setdefault("byFavoriteId", {})
+    missing = set()
+
+    for fav in favorites:
+        fav_id = str(fav.get("id", ""))
+        if fav_id and fav_id in by_fav:
+            continue
+        spotify_id = spotify_artist_id_from_item(fav)
+        if spotify_id and spotify_id not in by_spotify:
+            missing.add(spotify_id)
+
+    if missing and spotify_configured():
+        by_spotify.update(get_artists(sorted(missing)))
+        save_artist_cache(cache)
+
+    return cache
+
+def sonos_item_context(item, cache=None):
+    """Subtitle/context (usually artist); None if unknown or useless."""
+    return item_artist_name(item, cache)
+
+def cache_artist_from_playback(group_id, favorite_id, cache=None):
+    """After loading a favorite, cache artist name from now-playing metadata."""
+    cache = cache if cache is not None else load_artist_cache()
+    meta = get_playback_metadata(group_id)
+    artist = (meta.get("currentItem", {}).get("track", {}).get("artist") or {}).get("name")
+    if not artist:
+        return cache
+
+    by_fav = cache.setdefault("byFavoriteId", {})
+    by_fav[str(favorite_id)] = artist
+
+    container_id = (meta.get("container", {}).get("id") or {}).get("objectId") or ""
+    if "spotify:" in container_id:
+        container_id = container_id[container_id.index("spotify:"):]
+    match = re.search(r"spotify:artistTopTracks:([A-Za-z0-9]+)", container_id)
+    if match:
+        cache.setdefault("bySpotifyArtistId", {})[match.group(1)] = artist
+
+    save_artist_cache(cache)
+    return cache
 
 def _load_tokens():
     with open(TOKEN_FILE) as f:
@@ -148,12 +233,16 @@ def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
 
 def set_volume(group_id, delta_steps):
-    """delta_steps: +1 or -1 per encoder detent."""
+    """delta_steps: signed detent count (batched)."""
+    pct = int(os.environ.get("VOLUME_PCT_PER_DETENT", "2"))
     _post(f"/groups/{group_id}/groupVolume/relative",
-          {"volumeDelta": delta_steps * 2})  # 2% per detent
+          {"volumeDelta": delta_steps * pct})
 
 def get_favorites(household_id):
     return _get(f"/households/{household_id}/favorites")["items"]
+
+def get_playback_metadata(group_id):
+    return _get(f"/groups/{group_id}/playbackMetadata")
 
 def load_favorite(group_id, favorite_id):
     resp = _post(f"/groups/{group_id}/favorites",

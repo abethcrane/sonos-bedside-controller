@@ -98,7 +98,13 @@ def patch_item(item_id):
 # --- BROWSE available Sonos playlists and favorites (for discovery) ---
 @app.route("/browse", methods=["GET"])
 def browse():
-    from sonos import get_household_and_group, get_playlists, get_favorites, sonos_item_context
+    from sonos import (
+        get_household_and_group,
+        get_playlists,
+        get_favorites,
+        resolve_favorite_artists,
+        sonos_item_context,
+    )
     hh_id, _ = get_household_and_group()
     playlists = []
     for p in get_playlists(hh_id):
@@ -107,10 +113,12 @@ def browse():
         if ctx:
             item["description"] = ctx
         playlists.append(item)
+    favorites_raw = get_favorites(hh_id)
+    cache = resolve_favorite_artists(favorites_raw)
     favorites = []
-    for f in get_favorites(hh_id):
+    for f in favorites_raw:
         item = {"type": "favorite", "id": f["id"], "name": f["name"]}
-        ctx = sonos_item_context(f)
+        ctx = sonos_item_context(f, cache)
         if ctx:
             item["description"] = ctx
         favorites.append(item)
@@ -119,8 +127,10 @@ def browse():
 # --- PLAY a playlist or favorite on the Sonos group (preview from UI) ---
 @app.route("/play", methods=["POST"])
 def play_item():
+    import time
     from sonos import (
         SonosError,
+        cache_artist_from_playback,
         favorite_unsupported,
         get_favorites,
         get_household_and_group,
@@ -147,6 +157,10 @@ def play_item():
             load_playlist(group_id, item_id)
         else:
             load_favorite(group_id, item_id)
+            time.sleep(0.8)
+            cache = cache_artist_from_playback(group_id, item_id)
+            artist = cache.get("byFavoriteId", {}).get(str(item_id))
+            return jsonify({"ok": True, "artist": artist})
     except SonosError as e:
         return jsonify({"ok": False, "error": f"{e.error_code}: {e.reason}"}), 502
     except Exception as e:
@@ -422,8 +436,14 @@ async function playItem(idx, onDevice) {
     if (!res.ok) {
       throw new Error(data.error || 'Play failed');
     }
+    if (data.artist) {
+      item.description = data.artist;
+      sonosById[item.id] = { ...sonosById[item.id], description: data.artist };
+    }
     status.className = 'status ok';
     status.textContent = `Playing on Sonos: ${itemTitle(item)}`;
+    renderActive();
+    renderAvailable();
   } catch (e) {
     playingId = null;
     renderActive();
