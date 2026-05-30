@@ -339,6 +339,11 @@ def main():
                 if should_reload():
                     playlists_by_id, favorites_by_id = do_reload()
                 process_encoder_ui()
+                with _input_lock:
+                    sel = selected
+                    items = ordered
+                if items and display.advance_marquee(sel, items):
+                    _paint_list()
                 time.sleep(0.02)
 
         else:
