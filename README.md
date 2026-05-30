@@ -150,12 +150,14 @@ From your Mac, open **http://sonos-box.local:8080/ui** — if the config page lo
 
 ### 8. Auto-start on boot
 
-Copy the unit file (adjust `User` and paths if yours differ):
+Install the unit file once (symlink so `git pull` updates it — adjust `User` and paths if yours differ):
 
 ```bash
-sudo cp ~/sonos-bedside-controller/deploy/sonos.service /etc/systemd/system/sonos.service
-sudo nano /etc/systemd/system/sonos.service   # fix User / paths if needed
+sudo ln -sf ~/sonos-bedside-controller/deploy/sonos.service /etc/systemd/system/sonos.service
+sudo nano ~/sonos-bedside-controller/deploy/sonos.service   # fix User / paths if needed
 ```
+
+(`cp` works too, but then you have two copies to keep in sync.)
 
 Or paste manually:
 
@@ -211,6 +213,7 @@ cd ~/sonos-bedside-controller
 git pull
 source ~/venv/bin/activate
 pip install -r requirements.txt   # only if dependencies changed
+sudo systemctl daemon-reload      # only if deploy/sonos.service changed
 sudo systemctl restart sonos
 ```
 
@@ -337,7 +340,7 @@ Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
 
 ```bash
 # Encoder counting (menu + volume GPIO)
-ENCODER_SAME_DIR_US=1500 python main.py   # default 4000 — lower = more steps when spinning fast
+ENCODER_SAME_DIR_US=1500 python main.py   # default 1500 (µs) — lower = more steps when spinning fast
 # OPPO_DIR debounce removed — reversals always count immediately
 
 # Fast scroll dropping detents? SPI was blocking GPIO — cap redraw rate:

@@ -28,7 +28,7 @@ _ENCODER_TRANSITIONS = (
 )
 DETENT_PULSES = 4
 # Bounce often double-fires the same direction; fast reversals are real.
-MIN_SAME_DIR_EMIT_US = int(os.environ.get("ENCODER_SAME_DIR_US", "4000"))
+MIN_SAME_DIR_EMIT_US = int(os.environ.get("ENCODER_SAME_DIR_US", "1500"))
 GPIO_GLITCH_FILTER_US = int(os.environ.get("ENCODER_GLITCH_US", "300"))
 
 
