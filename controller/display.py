@@ -223,26 +223,25 @@ class Display:
         w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
         img = Image.new("1", (w, h), 0)
         draw = ImageDraw.Draw(img)
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
-        big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
+        body = self._list_font
 
-        draw.text((TEXT_PAD_LEFT, 2), "Volume", font=font, fill=1)
-        draw.line([(0, 14), (w - 1, 14)], fill=1, width=1)
+        draw.text((TEXT_PAD_LEFT, 2), "Volume", font=body, fill=1)
+        draw.line([(0, 18), (w - 1, 18)], fill=1, width=1)
 
         if current is not None and new is not None:
             y = 22
-            line_h = 16
+            line_h = 18
             rows = (
                 ("Now", str(current)),
                 ("Chg", f"{change:+d}"),
                 ("New", str(new)),
             )
             for label_text, value in rows:
-                draw.text((TEXT_PAD_LEFT, y), label_text, font=font, fill=1)
-                draw.text((52, y), value, font=big if label_text == "New" else font, fill=1)
+                draw.text((TEXT_PAD_LEFT, y), label_text, font=body, fill=1)
+                draw.text((52, y), value, font=body, fill=1)
                 y += line_h
         else:
-            draw.text((TEXT_PAD_LEFT, 40), label, font=big, fill=1)
+            draw.text((TEXT_PAD_LEFT, 40), label, font=body, fill=1)
 
         show_image(self._disp, img, invert=self._invert)
         if sys.stdout.isatty():
