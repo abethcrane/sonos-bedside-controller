@@ -24,6 +24,7 @@ cd sonos-bedside-controller
 ```bash
 cp .env.example .env
 # edit .env — SONOS_CLIENT_ID and SONOS_CLIENT_SECRET
+# optional: SPOTIFY_CLIENT_ID / SPOTIFY_CLIENT_SECRET (see Configuring playlists / favorites)
 ```
 
 ### 3. Python venv + one-time OAuth
@@ -210,6 +211,25 @@ sudo systemctl restart sonos
 ## Configuring playlists / favorites
 
 Edit `controller/config.json` by hand, or use the web UI at **http://sonos-box.local:8080/ui** on your LAN. After saving changes in the UI, the running app picks them up via `/reload`.
+
+The UI supports drag-to-reorder, ▶ preview on Sonos, and ✎ custom labels (shown on the physical display instead of the Sonos name).
+
+### Spotify “Top Tracks” and artist names
+
+Sonos favorites like **Top Tracks** all share the same title. Sonos’s API only puts `"Spotify Playlist"` in the subtitle — not the artist. The app works around that in two ways:
+
+1. **Optional Spotify API creds (recommended)** — add to `.env` on Mac and Pi:
+
+   ```bash
+   SPOTIFY_CLIENT_ID=your_spotify_client_id
+   SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+   ```
+
+   Create a free app at [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard). Client-credentials flow only; no user login or redirect URI. On browse/load, the app reads the Spotify artist ID embedded in each favorite and resolves the name (e.g. “Sorry Darling” under “Top Tracks”). Results are cached in `controller/artist_cache.json` (gitignored).
+
+2. **Without Spotify creds** — press ▶ on a favorite once in the UI (or select it on the device). The app reads now-playing metadata from Sonos, caches the artist, and shows it on the next page reload. You can also rename items manually with ✎.
+
+After changing `.env`, restart the service (`sudo systemctl restart sonos` on the Pi).
 
 ---
 

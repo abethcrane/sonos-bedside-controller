@@ -208,8 +208,6 @@ class Display:
                 )
 
         show_image(self._disp, img, invert=self._invert)
-        if sys.stdout.isatty() and items:
-            print(f"[display] ▶ {items[selected_index]['name']}", flush=True)
 
     def render_volume_adjust(self, delta_percent):
         """Live volume feedback while turning the volume encoder."""

@@ -138,7 +138,6 @@ def fetch_sonos_data():
 def _paint_list():
     if not ordered:
         return
-    display.sim_log(f"▶ {ordered[selected]['name']}")
     display.render_list(ordered, selected)
 
 
@@ -154,6 +153,8 @@ def scroll(delta):
         with _input_lock:
             selected = (selected + delta) % len(ordered)
             _list_ui_dirty = True
+        arrow = "↑" if delta < 0 else "↓"
+        display.sim_log(f"{arrow} {ordered[selected]['name']}")
         return
     selected = (selected + delta) % len(ordered)
     arrow = "↑" if delta < 0 else "↓"
