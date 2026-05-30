@@ -150,24 +150,32 @@ From your Mac, open **http://sonos-box.local:8080/ui** — if the config page lo
 
 ### 8. Auto-start on boot
 
+Copy the unit file (adjust `User` and paths if yours differ):
+
 ```bash
-sudo nano /etc/systemd/system/sonos.service
+sudo cp ~/sonos-bedside-controller/deploy/sonos.service /etc/systemd/system/sonos.service
+sudo nano /etc/systemd/system/sonos.service   # fix User / paths if needed
 ```
 
-Paste (adjust `User` and paths if yours differ):
+Or paste manually:
 
 ```ini
 [Unit]
-Description=Sonos Controller
+Description=Sonos Bedside Controller
 After=network-online.target pigpiod.service
 Wants=network-online.target
+Requires=pigpiod.service
 
 [Service]
+Type=simple
 User=beth
 WorkingDirectory=/home/beth/sonos-bedside-controller/controller
+EnvironmentFile=-/home/beth/sonos-bedside-controller/.env
 ExecStart=/home/beth/venv/bin/python main.py
-Restart=on-failure
-RestartSec=5
+Restart=always
+RestartSec=10
+StartLimitIntervalSec=0
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target
@@ -183,6 +191,8 @@ sudo systemctl status sonos
 ```
 
 Logs: `journalctl -u sonos -f`
+
+> **Don't run `python main.py` in an SSH session for production.** That only lives while you're logged in. Use the systemd service above so it starts on boot and survives disconnects.
 
 ---
 
@@ -434,6 +444,10 @@ DISPLAY_INVERT=0 python display_test.py   # only if white/black look reversed
 
 | Symptom | Likely fix |
 |---------|------------|
+| App only runs while SSH'd in | You're starting it manually — set up systemd (§8). `systemctl is-enabled sonos` should say `enabled`. |
+| App doesn't start on power-on | `journalctl -u sonos -b` — usually WiFi not ready yet or pigpiod down. Startup now retries every 10s until Sonos responds. Check `systemctl status pigpiod`. |
+| Display shows happy face / app "died" | Process exited cleanly (systemd stop, crash, or old SSH session). `journalctl -u sonos --since today` for the reason. With systemd + `Restart=always` it should come back in ~10s. |
+| App stops after hours/days | Check `journalctl -u sonos` for OOM (`Killed`) or Sonos token errors. Reload failures no longer kill the main loop. |
 | `Missing SONOS_CLIENT_ID` | Copy `.env` to the repo root on the Pi |
 | `KeyError: access_token` or token refresh error | Re-run `python auth_setup.py` on your Mac, re-copy `controller/tokens.json` |
 | Encoders dead / bounce / false select | `sudo systemctl status pigpiod`; run `python encoder_probe.py`. KY-040: **GND + CLK/DT/SW only**, `+` NC, **never +→GND**. Wire encoder 2 or floating GPIO 5/26/13 can spuriously change volume/play |

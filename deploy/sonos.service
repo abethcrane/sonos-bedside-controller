@@ -1,0 +1,20 @@
+[Unit]
+Description=Sonos Bedside Controller
+After=network-online.target pigpiod.service
+Wants=network-online.target
+Requires=pigpiod.service
+
+[Service]
+Type=simple
+User=beth
+WorkingDirectory=/home/beth/sonos-bedside-controller/controller
+EnvironmentFile=-/home/beth/sonos-bedside-controller/.env
+ExecStart=/home/beth/venv/bin/python main.py
+Restart=always
+RestartSec=10
+# Don't give up after repeated boot-time WiFi/Sonos failures.
+StartLimitIntervalSec=0
+TimeoutStopSec=15
+
+[Install]
+WantedBy=multi-user.target

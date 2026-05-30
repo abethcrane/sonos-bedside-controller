@@ -108,6 +108,9 @@ UI_LOOP_S = float(os.environ.get("UI_LOOP_S", "0.02"))
 # Cap Sharp playlist redraws — SPI in the main thread was starving pigpio callbacks.
 LIST_RENDER_MIN_S = float(os.environ.get("LIST_RENDER_MIN_S", "0.05"))
 LIST_RENDER_IDLE_S = float(os.environ.get("LIST_RENDER_IDLE_S", "0.04"))
+# Boot: WiFi/Sonos may not be ready the instant systemd starts us.
+STARTUP_RETRY_S = float(os.environ.get("STARTUP_RETRY_S", "10"))
+STARTUP_MAX_RETRIES = int(os.environ.get("STARTUP_MAX_RETRIES", "0"))  # 0 = retry forever
 
 # Encoder input vs display: callbacks touch these; process_encoder_ui() does SPI.
 _input_lock = threading.Lock()
@@ -138,6 +141,21 @@ def fetch_sonos_data():
         print(f"Run: curl http://localhost:8080/browse to see available playlists/favorites")
 
     return playlists_by_id, favorites_by_id
+
+
+def fetch_sonos_data_with_retry():
+    """Keep trying until Sonos is reachable (WiFi/DNS often lag boot by 30–60s)."""
+    attempt = 0
+    while True:
+        try:
+            return fetch_sonos_data()
+        except Exception as e:
+            attempt += 1
+            if STARTUP_MAX_RETRIES and attempt >= STARTUP_MAX_RETRIES:
+                raise
+            print(f"Sonos startup failed (attempt {attempt}): {e}", flush=True)
+            print(f"Retrying in {STARTUP_RETRY_S:.0f}s...", flush=True)
+            time.sleep(STARTUP_RETRY_S)
 
 # ── actions ───────────────────────────────────────────────────────────────────
 def _paint_list():
@@ -327,18 +345,23 @@ def do_play_pause():
 # ── config reload (called from Flask /reload endpoint) ───────────────────────
 def do_reload():
     global ordered, selected, hh_id, group_id
-    print("Reloading config from Sonos...")
-    hh_id, group_id = get_household_and_group()
-    playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
-    favorites_list = get_favorites(hh_id)
-    cache = resolve_favorite_artists(favorites_list)
-    favorites_by_id = {f["id"]: f for f in favorites_list}
-    config = load_config()
-    ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id, cache)
-    selected = min(selected, max(0, len(ordered) - 1))
-    display.sim_log("config reloaded")
-    _paint_list()
-    return playlists_by_id, favorites_by_id
+    print("Reloading config from Sonos...", flush=True)
+    try:
+        hh_id, group_id = get_household_and_group()
+        playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
+        favorites_list = get_favorites(hh_id)
+        cache = resolve_favorite_artists(favorites_list)
+        favorites_by_id = {f["id"]: f for f in favorites_list}
+        config = load_config()
+        ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id, cache)
+        selected = min(selected, max(0, len(ordered) - 1))
+        display.sim_log("config reloaded")
+        _paint_list()
+        return playlists_by_id, favorites_by_id
+    except Exception as e:
+        print(f"Config reload failed: {e}", flush=True)
+        display.sim_log(f"reload failed: {e}")
+        return None, None
 
 # ── keyboard input (Mac simulation) ──────────────────────────────────────────
 KEYS = {
@@ -371,11 +394,7 @@ def main():
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
 
     # fetch from Sonos (runs before any GPIO / encoder setup)
-    try:
-        playlists_by_id, favorites_by_id = fetch_sonos_data()
-    except Exception as e:
-        print(f"Sonos startup failed: {e}", flush=True)
-        raise
+    playlists_by_id, favorites_by_id = fetch_sonos_data_with_retry()
 
     # start Flask in background
     flask_thread = threading.Thread(
