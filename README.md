@@ -323,7 +323,7 @@ Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a P
 
 | Piece | File | Role |
 |-------|------|------|
-| Detent decode | `encoder.py` → `quadrature_tick()` | Gray code, 1 callback event per mechanical click; bounce filter + glitch filter |
+| Detent decode | `encoder.py` → `sequence_step()` | Strict 4-step sequence FSM; only emits after full CW/CCW path completes at idle; invalid/bounced edges discarded |
 | Input state | `main.py` `scroll()` / `volume()` | `selected` and volume counters updated under `_input_lock` |
 | Display | `main.py` `process_encoder_ui()` | Paints **latest** state; may skip frames while spinning fast — selection is still correct |
 | Bench test | `encoder_probe.py` | Same decoder as production; no display |
@@ -339,9 +339,9 @@ Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
 **Tuning detent feel** (both encoders share `encoder.py`; volume *feels* different because of Sonos batching):
 
 ```bash
-# Encoder counting (menu + volume GPIO)
-ENCODER_SAME_DIR_US=1500 python main.py   # default 1500 (µs) — lower = more steps when spinning fast
-# OPPO_DIR debounce removed — reversals always count immediately
+# Encoder counting — sequence FSM (menu + volume GPIO)
+ENCODER_GLITCH_US=300 python main.py       # default 300 (µs) — pigpio glitch filter on CLK/DT
+ENCODER_SEQ_TIMEOUT_US=150000 python main.py  # default 150000 (µs) — abandon partial sequence after this long
 
 # Fast scroll dropping detents? SPI was blocking GPIO — cap redraw rate:
 LIST_RENDER_MIN_S=0.05 python main.py      # max ~20 playlist paints/sec while spinning

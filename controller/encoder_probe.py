@@ -2,8 +2,8 @@
 """
 Hardware bring-up for KY-040 rotary encoder modules (PEC11R on PCB).
 
-Uses the same quadrature_tick() as encoder.py / main.py — good counts here but
-slow SPI in the app mean you must test production behavior separately.
+Uses the same sequence_step() FSM as encoder.py / main.py — good counts here
+but slow SPI in the app mean you must test production behavior separately.
 
 Wiring: CLK, DT, SW, GND to Pi; leave module + unconnected. Do not tie + to GND.
 
@@ -59,8 +59,7 @@ def wiring_banner():
 
 from encoder import (
     GPIO_GLITCH_FILTER_US,
-    quadrature_tick,
-    should_emit_detent,
+    sequence_step,
 )
 
 
@@ -72,9 +71,7 @@ class EncoderProbe:
         self.dt = dt
         self.plus = 0
         self.minus = 0
-        self._quad_accum = 0
-        self._last_emit_tick = 0
-        self._last_emit_dir = 0
+        self._seq_state = (0, 0, 0)
 
         for pin in (clk, dt):
             pi.set_mode(pin, pigpio.INPUT)
@@ -82,30 +79,25 @@ class EncoderProbe:
         pi.set_glitch_filter(clk, GPIO_GLITCH_FILTER_US)
         pi.set_glitch_filter(dt, GPIO_GLITCH_FILTER_US)
 
-        self._last_state = (pi.read(clk) << 1) | pi.read(dt)
         self._cb_clk = pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
         self._cb_dt = pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
 
-    def _read_quad_state(self):
+    def _read_pin_state(self):
         clk1, dt1 = self.pi.read(self.clk), self.pi.read(self.dt)
         clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
         if clk1 != clk2 or dt1 != dt2:
             clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
-        return (clk2 << 1) | dt2, clk2, dt2
+        return (clk2 << 1) | dt2
 
     def _on_quad(self, gpio, level, tick):
-        state, clk, dt = self._read_quad_state()
-        self._last_state, self._quad_accum, direction = quadrature_tick(
-            self._last_state, clk, dt, self._quad_accum
+        pin_state = self._read_pin_state()
+        self._seq_state, direction = sequence_step(
+            self._seq_state, pin_state, tick
         )
         if not direction:
             return
-        if not should_emit_detent(
-            self._last_emit_tick, self._last_emit_dir, direction, tick
-        ):
-            return
-        self._last_emit_tick = tick
-        self._last_emit_dir = direction
+        clk = pin_state >> 1
+        dt = pin_state & 1
         if direction > 0:
             self.plus += 1
         else:

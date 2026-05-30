@@ -111,6 +111,9 @@ UI_LOOP_S = float(os.environ.get("UI_LOOP_S", "0.02"))
 # Cap Sharp playlist redraws — SPI in the main thread was starving pigpio callbacks.
 LIST_RENDER_MIN_S = float(os.environ.get("LIST_RENDER_MIN_S", "0.05"))
 LIST_RENDER_IDLE_S = float(os.environ.get("LIST_RENDER_IDLE_S", "0.04"))
+# Ignore list-encoder press while scrolling or briefly after (KY-040 SW bounce).
+SCROLL_SELECT_GUARD_S = float(os.environ.get("SCROLL_SELECT_GUARD_S", "0.45"))
+VOLUME_PLAY_GUARD_S = float(os.environ.get("VOLUME_PLAY_GUARD_S", "0.45"))
 # Boot: WiFi/Sonos may not be ready the instant systemd starts us.
 STARTUP_RETRY_S = float(os.environ.get("STARTUP_RETRY_S", "10"))
 STARTUP_MAX_RETRIES = int(os.environ.get("STARTUP_MAX_RETRIES", "0"))  # 0 = retry forever
@@ -258,9 +261,11 @@ def process_encoder_ui():
     _flush_volume_if_due()
 
     if action == "select":
-        do_select()
+        if now - _scroll_last_detent_at >= SCROLL_SELECT_GUARD_S:
+            do_select()
     elif action == "play_pause":
-        do_play_pause()
+        if now - _vol_last_detent_at >= VOLUME_PLAY_GUARD_S:
+            do_play_pause()
 
 
 def _queue_action(name):
@@ -271,6 +276,8 @@ def _queue_action(name):
 
 def select():
     if USE_ENCODERS:
+        if time.monotonic() - _scroll_last_detent_at < SCROLL_SELECT_GUARD_S:
+            return
         _queue_action("select")
         return
     do_select()
@@ -389,6 +396,8 @@ def volume(delta):
 
 def toggle_play_pause():
     if USE_ENCODERS:
+        if time.monotonic() - _vol_last_detent_at < VOLUME_PLAY_GUARD_S:
+            return
         _queue_action("play_pause")
         return
     do_play_pause()
