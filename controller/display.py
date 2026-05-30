@@ -70,7 +70,7 @@ class Display:
             self._sim_lock = None
             self._disp, self._invert = open_display()
             self._list_font = ImageFont.truetype(
-                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 10
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 14
             )
             print(f"[display] Sharp {DISPLAY_WIDTH}×{DISPLAY_HEIGHT} ready")
 
@@ -183,7 +183,7 @@ class Display:
         draw.text((TEXT_PAD_LEFT, 2), header, font=font, fill=1)
         draw.line([(0, 14), (w - 1, 14)], fill=1, width=1)
 
-        line_h = 14
+        line_h = 18
         max_visible = max(1, (h - 18) // line_h)
         start = max(0, min(selected_index - max_visible // 2, len(items) - max_visible))
         visible = items[start : start + max_visible]
