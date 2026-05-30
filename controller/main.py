@@ -27,6 +27,7 @@ USE_ENCODERS = ON_PI and os.environ.get("USE_KEYBOARD", "").lower() not in ("1",
 # ── local imports ─────────────────────────────────────────────────────────────
 from sonos import (
     SonosError,
+    display_name,
     favorite_unsupported,
     get_household_and_group,
     get_playlists,
@@ -63,11 +64,12 @@ def resolve_items(config_items, playlists_by_id, favorites_by_id):
         label = entry.get("label", "")
 
         if item_type == "playlist" and item_id in playlists_by_id:
-            name = label or playlists_by_id[item_id]["name"]
+            pl = playlists_by_id[item_id]
+            name = display_name(pl["name"], pl.get("description"), label)
             resolved.append({"id": item_id, "type": "playlist", "name": name})
         elif item_type == "favorite" and item_id in favorites_by_id:
             fav = favorites_by_id[item_id]
-            name = label or fav["name"]
+            name = display_name(fav["name"], fav.get("description"), label)
             item = {"id": item_id, "type": "favorite", "name": name}
             if favorite_unsupported(fav):
                 item["unsupported"] = True

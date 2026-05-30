@@ -19,6 +19,36 @@ def favorite_unsupported(fav):
     """Local library favorites can't be loaded via the cloud Control API."""
     return fav.get("description") == "From Music Library"
 
+_GENERIC_FAVORITE_NAMES = frozenset({
+    "top tracks", "top track", "radio", "shuffle", "station",
+    "mix", "mixes", "on tour", "discover",
+})
+
+def is_generic_favorite_name(name):
+    n = (name or "").lower().strip()
+    return n in _GENERIC_FAVORITE_NAMES or n.startswith("top track")
+
+def display_name(name, description="", label=""):
+    """Build a label from Sonos name + description (artist/context)."""
+    if label:
+        return label
+    name = name or ""
+    desc = (description or "").strip()
+    if not desc or desc == "From Music Library":
+        return name
+    if is_generic_favorite_name(name):
+        return desc
+    if desc.lower() in name.lower():
+        return name
+    return f"{name} · {desc}"
+
+def sonos_item_context(item):
+    """Subtitle/context from Sonos (usually artist); None if not useful."""
+    desc = (item.get("description") or "").strip()
+    if not desc or desc == "From Music Library":
+        return None
+    return desc
+
 def _load_tokens():
     with open(TOKEN_FILE) as f:
         return json.load(f)

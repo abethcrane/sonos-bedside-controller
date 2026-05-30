@@ -98,13 +98,60 @@ def patch_item(item_id):
 # --- BROWSE available Sonos playlists and favorites (for discovery) ---
 @app.route("/browse", methods=["GET"])
 def browse():
-    from sonos import get_household_and_group, get_playlists, get_favorites
+    from sonos import get_household_and_group, get_playlists, get_favorites, sonos_item_context
     hh_id, _ = get_household_and_group()
-    playlists = [{"type": "playlist", "id": p["id"], "name": p["name"]}
-                 for p in get_playlists(hh_id)]
-    favorites = [{"type": "favorite", "id": f["id"], "name": f["name"]}
-                 for f in get_favorites(hh_id)]
+    playlists = []
+    for p in get_playlists(hh_id):
+        item = {"type": "playlist", "id": p["id"], "name": p["name"]}
+        ctx = sonos_item_context(p)
+        if ctx:
+            item["description"] = ctx
+        playlists.append(item)
+    favorites = []
+    for f in get_favorites(hh_id):
+        item = {"type": "favorite", "id": f["id"], "name": f["name"]}
+        ctx = sonos_item_context(f)
+        if ctx:
+            item["description"] = ctx
+        favorites.append(item)
     return jsonify({"playlists": playlists, "favorites": favorites})
+
+# --- PLAY a playlist or favorite on the Sonos group (preview from UI) ---
+@app.route("/play", methods=["POST"])
+def play_item():
+    from sonos import (
+        SonosError,
+        favorite_unsupported,
+        get_favorites,
+        get_household_and_group,
+        load_favorite,
+        load_playlist,
+    )
+    data = request.get_json(silent=True)
+    if not data or "type" not in data or "id" not in data:
+        return jsonify({"ok": False, "error": "Expected JSON body with 'type' and 'id'"}), 400
+    item_type = data["type"]
+    item_id = data["id"]
+    if item_type not in ("playlist", "favorite"):
+        return jsonify({"ok": False, "error": f"Unknown type: {item_type}"}), 400
+    try:
+        hh_id, group_id = get_household_and_group()
+        if item_type == "favorite":
+            fav = next((f for f in get_favorites(hh_id) if f["id"] == item_id), None)
+            if fav and favorite_unsupported(fav):
+                return jsonify({
+                    "ok": False,
+                    "error": "Local library favorites can't be played via the Sonos API",
+                }), 400
+        if item_type == "playlist":
+            load_playlist(group_id, item_id)
+        else:
+            load_favorite(group_id, item_id)
+    except SonosError as e:
+        return jsonify({"ok": False, "error": f"{e.error_code}: {e.reason}"}), 502
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+    return jsonify({"ok": True})
 
 # --- notify main loop to reload config without restart ---
 _reload_flag = False
@@ -143,11 +190,19 @@ UI_HTML = """<!DOCTYPE html>
   .item.drag-over { border-color: #378ADD; background: #E6F1FB; }
   .handle { color: #aaa; font-size: 14px; cursor: grab; flex-shrink: 0; }
   .handle:active { cursor: grabbing; }
-  .item-name { flex: 1; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .item-name input { border: none; background: transparent; font: inherit; width: 100%; outline: none; color: inherit; }
+  .item-name { flex: 1; font-size: 14px; min-width: 0; }
+  .item-title { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item-desc { font-size: 12px; color: #6b6b67; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
+  .item-name input { border: none; background: transparent; font: inherit; width: 100%; outline: none; color: inherit; display: block; }
   .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; flex-shrink: 0; }
   .badge-pl { background: #E1F5EE; color: #0F6E56; }
   .badge-fav { background: #EEEDFE; color: #534AB7; }
+  .icon-btn { background: none; border: none; color: #aaa; font-size: 14px; cursor: pointer; flex-shrink: 0; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+  .icon-btn:hover { background: rgba(0,0,0,0.05); color: #555; }
+  .icon-btn.play:hover { color: #378ADD; }
+  .icon-btn.edit:hover { color: #534AB7; }
+  .icon-btn.rm:hover { color: #E24B4A; background: none; }
+  .icon-btn.playing { color: #378ADD; }
   .rm { background: none; border: none; color: #ccc; font-size: 16px; cursor: pointer; flex-shrink: 0; line-height: 1; padding: 0 2px; }
   .rm:hover { color: #E24B4A; }
   .available .item { cursor: pointer; }
@@ -165,7 +220,7 @@ UI_HTML = """<!DOCTYPE html>
 <body>
  
 <h1>Sonos Beside</h1>
-<p class="sub">Drag to reorder · click + to add · click × to remove · double-click name to rename</p>
+<p class="sub">Drag to reorder · ▶ play on Sonos · ✎ rename · + add · × remove</p>
  
 <div class="cols">
   <div class="panel">
@@ -186,7 +241,44 @@ UI_HTML = """<!DOCTYPE html>
 <script>
 let activeItems = [];
 let availableItems = [];
+let sonosById = {};
 let dragIdx = null;
+let playingId = null;
+
+function mergeSonosMeta(items) {
+  return items.map(item => {
+    const meta = sonosById[item.id];
+    if (!meta) return item;
+    return { ...item, name: item.name || meta.name, description: meta.description };
+  });
+}
+
+function itemTitle(item) {
+  return item.label || item.name || item.id;
+}
+
+function itemSubtitle(item) {
+  if (item.label) return item.description || '';
+  return item.description || '';
+}
+
+function itemNameHtml(item, idx, editable) {
+  const title = itemTitle(item);
+  const sub = itemSubtitle(item);
+  if (editable) {
+    return `<span class="item-name">
+      <input id="name-${idx}" value="${escHtml(title)}" title="click ✎ to rename" readonly
+        onblur="commitRename(${idx}, this)"
+        onkeydown="if(event.key==='Enter'){this.blur()} if(event.key==='Escape'){this.value=itemTitle(activeItems[${idx}]);this.blur()}"
+      />
+      ${sub ? `<div class="item-desc">${escHtml(sub)}</div>` : ''}
+    </span>`;
+  }
+  return `<span class="item-name">
+    <div class="item-title">${escHtml(title)}</div>
+    ${sub ? `<div class="item-desc">${escHtml(sub)}</div>` : ''}
+  </span>`;
+}
  
 async function load() {
   const [configRes, browseRes] = await Promise.all([
@@ -194,7 +286,12 @@ async function load() {
     fetch('/browse').then(r => r.json()),
   ]);
  
-  activeItems = configRes.items || [];
+  sonosById = {};
+  for (const item of [...(browseRes.favorites || []), ...(browseRes.playlists || [])]) {
+    sonosById[item.id] = item;
+  }
+
+  activeItems = mergeSonosMeta(configRes.items || []);
  
   const activeIds = new Set(activeItems.map(i => i.id));
   const allAvailable = [
@@ -220,19 +317,18 @@ function renderActive() {
     div.draggable = true;
     div.dataset.idx = idx;
  
-    const label = item.label || item.name || '';
+    const label = itemTitle(item);
     const badgeClass = item.type === 'playlist' ? 'badge-pl' : 'badge-fav';
     const badgeText = item.type === 'playlist' ? 'playlist' : 'favorite';
  
+    const playing = playingId === item.id ? ' playing' : '';
     div.innerHTML = `
       <span class="handle" title="drag to reorder">⠿</span>
-      <span class="item-name"><input value="${escHtml(label)}" title="double-click to edit" readonly
-        ondblclick="this.removeAttribute('readonly');this.focus()"
-        onblur="commitRename(${idx}, this)"
-        onkeydown="if(event.key==='Enter'){this.blur()}"
-      /></span>
+      ${itemNameHtml(item, idx, true)}
+      <button class="icon-btn play${playing}" title="play on Sonos" onclick="playItem(${idx}, true)">▶</button>
+      <button class="icon-btn edit" title="rename" onclick="startRename(${idx})">✎</button>
       <span class="badge ${badgeClass}">${badgeText}</span>
-      <button class="rm" title="remove" onclick="removeItem(${idx})">×</button>
+      <button class="icon-btn rm" title="remove" onclick="removeItem(${idx})">×</button>
     `;
  
     div.addEventListener('dragstart', () => { dragIdx = idx; div.classList.add('dragging'); });
@@ -265,10 +361,12 @@ function renderAvailable() {
     div.className = 'item';
     const badgeClass = item.type === 'playlist' ? 'badge-pl' : 'badge-fav';
     const badgeText = item.type === 'playlist' ? 'playlist' : 'favorite';
+    const playing = playingId === item.id ? ' playing' : '';
     div.innerHTML = `
-      <span class="item-name">${escHtml(item.name)}</span>
+      ${itemNameHtml(item, idx, false)}
+      <button class="icon-btn play${playing}" title="play on Sonos" onclick="playItem(${idx}, false)">▶</button>
       <span class="badge ${badgeClass}">${badgeText}</span>
-      <button class="rm" style="color:#1D9E75;font-size:18px" title="add to device" onclick="addItem(${idx})">+</button>
+      <button class="icon-btn rm" style="color:#1D9E75;font-size:18px" title="add to device" onclick="addItem(${idx})">+</button>
     `;
     el.appendChild(div);
   });
@@ -276,21 +374,63 @@ function renderAvailable() {
  
 function addItem(idx) {
   const item = availableItems.splice(idx, 1)[0];
-  activeItems.push({ type: item.type, id: item.id, label: item.name });
+  activeItems.push({ type: item.type, id: item.id, name: item.name, description: item.description });
   renderActive();
   renderAvailable();
 }
- 
+
 function removeItem(idx) {
   const item = activeItems.splice(idx, 1)[0];
-  availableItems.unshift({ type: item.type, id: item.id, name: item.label || item.name || item.id });
+  availableItems.unshift({
+    type: item.type,
+    id: item.id,
+    name: item.name || item.label || item.id,
+    description: item.description,
+  });
   renderActive();
   renderAvailable();
 }
  
+function startRename(idx) {
+  const input = document.getElementById(`name-${idx}`);
+  if (!input) return;
+  input.removeAttribute('readonly');
+  input.focus();
+  input.select();
+}
+
 function commitRename(idx, input) {
   input.setAttribute('readonly', true);
   activeItems[idx].label = input.value.trim() || activeItems[idx].label;
+}
+
+async function playItem(idx, onDevice) {
+  const item = onDevice ? activeItems[idx] : availableItems[idx];
+  const status = document.getElementById('status');
+  status.className = 'status';
+  status.textContent = `Playing ${itemTitle(item)}…`;
+  playingId = item.id;
+  renderActive();
+  renderAvailable();
+  try {
+    const res = await fetch('/play', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: item.type, id: item.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(data.error || 'Play failed');
+    }
+    status.className = 'status ok';
+    status.textContent = `Playing on Sonos: ${itemTitle(item)}`;
+  } catch (e) {
+    playingId = null;
+    renderActive();
+    renderAvailable();
+    status.className = 'status err';
+    status.textContent = `Play failed: ${e.message}`;
+  }
 }
  
 async function save() {
@@ -298,10 +438,15 @@ async function save() {
   status.className = 'status';
   status.textContent = 'Saving...';
   try {
+    const payload = activeItems.map(({ type, id, label }) => {
+      const item = { type, id };
+      if (label) item.label = label;
+      return item;
+    });
     const res = await fetch('/items', {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: activeItems }),
+      body: JSON.stringify({ items: payload }),
     });
     const data = await res.json();
     if (res.ok) {
