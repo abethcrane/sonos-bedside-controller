@@ -39,6 +39,7 @@ from sonos import (
     load_favorite,
     play_pause,
     resolve_favorite_artists,
+    get_volume,
     set_volume,
 )
 from display import Display, SIM_HELP
@@ -96,7 +97,9 @@ hh_id    = None
 group_id = None
 display  = Display()
 
-_vol_session_delta = 0  # detents since last playlist view (×2 = % on screen)
+_vol_session_delta = 0  # detents since last volume read or Sonos flush
+_vol_base = None  # Sonos group volume at start of current adjustment burst
+_vol_fetch_inflight = False
 _vol_pending = 0
 _vol_lock = threading.Lock()
 _vol_last_detent_at = 0.0
@@ -158,14 +161,55 @@ def fetch_sonos_data_with_retry():
             time.sleep(STARTUP_RETRY_S)
 
 # ── actions ───────────────────────────────────────────────────────────────────
+def _reset_volume_session():
+    global _vol_base, _vol_session_delta
+    _vol_base = None
+    _vol_session_delta = 0
+
+
 def _paint_list():
     if not ordered:
         return
+    _reset_volume_session()
     display.render_list(ordered, selected)
 
 
+def _vol_change_pct():
+    return _vol_session_delta * VOLUME_PCT_PER_DETENT
+
+
+def _vol_projected():
+    change = _vol_change_pct()
+    if _vol_base is None:
+        return None, change, None
+    new = max(0, min(100, _vol_base + change))
+    return _vol_base, change, new
+
+
+def _ensure_vol_base():
+    """Fetch Sonos volume once per volume session (first knob detent)."""
+    global _vol_fetch_inflight
+    if _vol_base is not None or _vol_fetch_inflight or group_id is None:
+        return
+
+    def fetch():
+        global _vol_base, _vol_fetch_inflight, _vol_ui_dirty
+        try:
+            _vol_base = get_volume(group_id)
+        except Exception as e:
+            print(f"Volume read failed: {e}", flush=True)
+        finally:
+            _vol_fetch_inflight = False
+            with _input_lock:
+                _vol_ui_dirty = True
+
+    _vol_fetch_inflight = True
+    threading.Thread(target=fetch, daemon=True).start()
+
+
 def _paint_volume():
-    display.render_volume_adjust(_vol_session_delta * VOLUME_PCT_PER_DETENT)
+    current, change, new = _vol_projected()
+    display.render_volume_adjust(current, change, new)
 
 
 def scroll(delta):
@@ -271,7 +315,7 @@ def do_select():
 
 def _flush_volume():
     """Send accumulated detents to Sonos (background thread or before select)."""
-    global _vol_pending, _vol_api_inflight
+    global _vol_pending, _vol_api_inflight, _vol_base, _vol_session_delta, _vol_ui_dirty
     with _vol_lock:
         batch = _vol_pending
         _vol_pending = 0
@@ -279,11 +323,19 @@ def _flush_volume():
     if batch == 0:
         return
     pct = batch * VOLUME_PCT_PER_DETENT
-    msg = f"vol Sonos Δ{pct:+d}% ({abs(batch)} detent{'s' if abs(batch) != 1 else ''})"
+    if _vol_base is not None:
+        msg = f"vol Sonos {max(0, min(100, _vol_base + pct))} ({pct:+d}%)"
+    else:
+        msg = f"vol Sonos Δ{pct:+d}% ({abs(batch)} detent{'s' if abs(batch) != 1 else ''})"
     display.sim_log(msg)
     print(f"  {msg}", flush=True)
     try:
         set_volume(group_id, batch)
+        if _vol_base is not None:
+            _vol_base = max(0, min(100, _vol_base + pct))
+        _vol_session_delta = 0
+        with _input_lock:
+            _vol_ui_dirty = True
     except Exception as e:
         print(f"Volume failed: {e}", flush=True)
 
@@ -313,12 +365,17 @@ def _flush_volume_if_due():
 
 
 def volume(delta):
-    global _vol_session_delta, _vol_ui_dirty, _vol_pending, _vol_last_detent_at
+    global _vol_session_delta, _vol_ui_dirty, _vol_pending, _vol_last_detent_at, _vol_base
+    _ensure_vol_base()
     if not USE_ENCODERS:
         _vol_session_delta += delta
         _paint_volume()
         try:
             set_volume(group_id, delta)
+            pct = delta * VOLUME_PCT_PER_DETENT
+            if _vol_base is not None:
+                _vol_base = max(0, min(100, _vol_base + pct))
+                _vol_session_delta = 0
         except Exception as e:
             print(f"Volume failed: {e}", flush=True)
         return

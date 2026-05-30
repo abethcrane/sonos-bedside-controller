@@ -209,10 +209,13 @@ class Display:
 
         show_image(self._disp, img, invert=self._invert)
 
-    def render_volume_adjust(self, delta_percent):
+    def render_volume_adjust(self, current, change, new):
         """Live volume feedback while turning the volume encoder."""
         self._view = "volume"
-        label = f"{delta_percent:+d}%"
+        if current is not None and new is not None:
+            label = f"now {current}  {change:+d}  →  {new}"
+        else:
+            label = f"{change:+d}%"
         if SIMULATE:
             self.sim_log(f"vol {label}")
             return
@@ -223,9 +226,24 @@ class Display:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
         big = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 22)
 
-        draw.text((4, 2), "Volume", font=font, fill=1)
+        draw.text((TEXT_PAD_LEFT, 2), "Volume", font=font, fill=1)
         draw.line([(0, 14), (w - 1, 14)], fill=1, width=1)
-        draw.text((4, 40), label, font=big, fill=1)
+
+        if current is not None and new is not None:
+            y = 22
+            line_h = 16
+            rows = (
+                ("Now", str(current)),
+                ("Chg", f"{change:+d}"),
+                ("New", str(new)),
+            )
+            for label_text, value in rows:
+                draw.text((TEXT_PAD_LEFT, y), label_text, font=font, fill=1)
+                draw.text((52, y), value, font=big if label_text == "New" else font, fill=1)
+                y += line_h
+        else:
+            draw.text((TEXT_PAD_LEFT, 40), label, font=big, fill=1)
+
         show_image(self._disp, img, invert=self._invert)
         if sys.stdout.isatty():
             print(f"[display] vol {label}", flush=True)

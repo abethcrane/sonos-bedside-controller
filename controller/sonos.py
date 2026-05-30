@@ -232,6 +232,10 @@ def load_playlist(group_id, playlist_id):
 def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
 
+def get_volume(group_id):
+    """Current group volume 0–100."""
+    return _get(f"/groups/{group_id}/groupVolume")["volume"]
+
 def set_volume(group_id, delta_steps):
     """delta_steps: signed detent count (batched)."""
     pct = int(os.environ.get("VOLUME_PCT_PER_DETENT", "2"))
