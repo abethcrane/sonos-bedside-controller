@@ -1,10 +1,11 @@
 """
 KY-040 rotary encoder input (pigpio GPIO callbacks).
 
-Decoding: strict 4-step sequence FSM (à la codingABI/KY040). Only emits a
-detent after the full CW or CCW quadrature path completes at the idle state
-(both lines high). Invalid/bounced edges are silently discarded — no
-accumulator drift, no time-based same-direction debounce needed.
+Decoding: sequence FSM that locks direction from the first non-idle edge,
+confirms via 00 (both low), and emits one detent when the encoder returns to
+idle (11, both high). Tolerant of skipped intermediate edges — the KY-040
+often transitions too fast for the glitch filter or callback to catch all 4
+quadrature states.
 
 Callbacks must stay fast (no SPI/HTTP); main.py updates state and runs the
 display loop.
@@ -28,57 +29,48 @@ GPIO_GLITCH_FILTER_US = int(os.environ.get("ENCODER_GLITCH_US", "300"))
 # Idle state: both CLK and DT high (pull-ups, KY-040 rest position).
 _IDLE = 0b11
 
-# Valid 4-step quadrature sequences (CLK<<1 | DT at each step).
-#   CW:  01 → 00 → 10 → 11
-#   CCW: 10 → 00 → 01 → 11
-_SEQ_CW  = (0b01, 0b00, 0b10, _IDLE)
-_SEQ_CCW = (0b10, 0b00, 0b01, _IDLE)
-
 # Abandon a partial sequence after this many µs with no progress.
 SEQUENCE_TIMEOUT_US = int(os.environ.get("ENCODER_SEQ_TIMEOUT_US", "150000"))
+
+# First non-idle edge determines direction:
+#   CW  starts with 01 (DT falls first, CLK still high)
+#   CCW starts with 10 (CLK falls first, DT still high)
+# Confirmation: must see 00 (both low) before returning to idle.
+# Emit: on return to idle (11) after confirmed direction.
+_DIR_FROM_FIRST_EDGE = {0b01: 1, 0b10: -1}
 
 
 def sequence_step(seq_state, new_pin_state, tick):
     """Advance the sequence FSM. Returns (new_seq_state, direction).
 
-    seq_state is a tuple: (step, direction, last_tick)
-      step: 0..3 index into _SEQ_CW/_SEQ_CCW, 0 = waiting for first edge
-      direction: +1 (CW), -1 (CCW), or 0 (undecided)
-      last_tick: pigpio µs tick of last valid transition
+    seq_state is a tuple: (phase, direction, last_tick)
+      phase 0: idle, waiting for first non-idle edge
+      phase 1: direction locked, waiting for 00 confirmation
+      phase 2: confirmed, waiting for return to idle (11) to emit
 
     direction result: 0 = no detent yet, +1 = CW detent, -1 = CCW detent.
     """
-    step, direction, last_tick = seq_state
+    phase, direction, last_tick = seq_state
 
-    if step > 0 and (tick - last_tick) > SEQUENCE_TIMEOUT_US:
-        step, direction = 0, 0
+    if phase > 0 and (tick - last_tick) > SEQUENCE_TIMEOUT_US:
+        phase, direction = 0, 0
 
-    if new_pin_state == _IDLE and step == 0:
+    if phase == 0:
+        if new_pin_state in _DIR_FROM_FIRST_EDGE:
+            return (1, _DIR_FROM_FIRST_EDGE[new_pin_state], tick), 0
         return (0, 0, tick), 0
 
-    if step == 0:
-        if new_pin_state == _SEQ_CW[0]:
-            return (1, 1, tick), 0
-        if new_pin_state == _SEQ_CCW[0]:
-            return (1, -1, tick), 0
-        return (0, 0, tick), 0
+    if phase == 1:
+        if new_pin_state == 0b00:
+            return (2, direction, tick), 0
+        if new_pin_state == _IDLE:
+            return (0, 0, tick), 0
+        return (1, direction, last_tick), 0
 
-    if direction == 1:
-        expected = _SEQ_CW[step]
-    else:
-        expected = _SEQ_CCW[step]
-
-    if new_pin_state == expected:
-        step += 1
-        if step >= 4:
-            return (0, 0, tick), direction
-        return (step, direction, tick), 0
-
-    # Wrong state — reset only if we're back to idle.
+    # phase == 2: confirmed, waiting for idle
     if new_pin_state == _IDLE:
-        return (0, 0, tick), 0
-    # Otherwise hold position: might be bounce, real next edge will come.
-    return (step, direction, last_tick), 0
+        return (0, 0, tick), direction
+    return (2, direction, last_tick), 0
 
 
 class Encoder:
