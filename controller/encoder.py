@@ -22,7 +22,7 @@ if not SIMULATE:
 DEBOUNCE_US = 250_000
 # KY-040 often shorts SW while spinning — require stillness after last *detent*.
 ROTATE_QUIET_BEFORE_PRESS_US = int(os.environ.get("ENCODER_PRESS_QUIET_US", "300000"))
-MIN_PRESS_HOLD_US = int(os.environ.get("ENCODER_MIN_PRESS_US", "80000"))
+MIN_PRESS_HOLD_US = int(os.environ.get("ENCODER_MIN_PRESS_US", "150000"))
 
 GPIO_GLITCH_FILTER_US = int(os.environ.get("ENCODER_GLITCH_US", "300"))
 
@@ -83,6 +83,7 @@ class Encoder:
         self._last_sw_tick = 0
         self._last_rotate_tick = 0
         self._sw_down_tick = 0
+        self._rotate_tick_at_sw_down = 0
         self._seq_state = (0, 0, 0)
 
         if SIMULATE:
@@ -125,7 +126,11 @@ class Encoder:
 
     def _on_sw(self, gpio, level, tick):
         if level == 0:
+            # Reject the press early if we're actively spinning.
+            if tick - self._last_rotate_tick < ROTATE_QUIET_BEFORE_PRESS_US:
+                return
             self._sw_down_tick = tick
+            self._rotate_tick_at_sw_down = self._last_rotate_tick
             return
         if not self._sw_down_tick:
             return
@@ -133,6 +138,10 @@ class Encoder:
         self._sw_down_tick = 0
         if held_us < MIN_PRESS_HOLD_US:
             return
+        # Any rotation while SW was held → not a deliberate press.
+        if self._last_rotate_tick != self._rotate_tick_at_sw_down:
+            return
+        # Rotation started right after release.
         if tick - self._last_rotate_tick < ROTATE_QUIET_BEFORE_PRESS_US:
             return
         if tick - self._last_sw_tick < DEBOUNCE_US:
