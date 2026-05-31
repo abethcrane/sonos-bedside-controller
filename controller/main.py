@@ -99,6 +99,7 @@ display  = Display()
 
 _vol_session_delta = 0  # detents since last volume read or Sonos flush
 _vol_base = None  # Sonos group volume at start of current adjustment burst
+_vol_session_start = None  # volume when user first touched knob (fixed for session)
 _vol_fetch_inflight = False
 _vol_pending = 0
 _vol_lock = threading.Lock()
@@ -165,9 +166,10 @@ def fetch_sonos_data_with_retry():
 
 # ── actions ───────────────────────────────────────────────────────────────────
 def _reset_volume_session():
-    global _vol_base, _vol_session_delta
+    global _vol_base, _vol_session_delta, _vol_session_start
     _vol_base = None
     _vol_session_delta = 0
+    _vol_session_start = None
 
 
 def _paint_list():
@@ -186,7 +188,9 @@ def _vol_projected():
     if _vol_base is None:
         return None, change, None
     new = max(0, min(100, _vol_base + change))
-    return _vol_base, change, new
+    start = _vol_session_start if _vol_session_start is not None else _vol_base
+    total_change = new - start
+    return start, total_change, new
 
 
 def _ensure_vol_base():
@@ -196,9 +200,11 @@ def _ensure_vol_base():
         return
 
     def fetch():
-        global _vol_base, _vol_fetch_inflight, _vol_ui_dirty
+        global _vol_base, _vol_fetch_inflight, _vol_ui_dirty, _vol_session_start
         try:
             _vol_base = get_volume(group_id)
+            if _vol_session_start is None:
+                _vol_session_start = _vol_base
         except Exception as e:
             print(f"Volume read failed: {e}", flush=True)
         finally:

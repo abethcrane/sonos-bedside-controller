@@ -223,25 +223,40 @@ class Display:
         w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
         img = Image.new("1", (w, h), 0)
         draw = ImageDraw.Draw(img)
+        header_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 16
+        )
+        big_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 28
+        )
         body = self._list_font
 
-        draw.text((TEXT_PAD_LEFT, 2), "Volume", font=body, fill=1)
-        draw.line([(0, 18), (w - 1, 18)], fill=1, width=1)
+        draw.text((TEXT_PAD_LEFT, 2), "Volume", font=header_font, fill=1)
+        draw.line([(0, 22), (w - 1, 22)], fill=1, width=1)
 
         if current is not None and new is not None:
-            y = 22
-            line_h = 18
-            rows = (
-                ("Now", str(current)),
-                ("Chg", f"{change:+d}"),
-                ("New", str(new)),
-            )
-            for label_text, value in rows:
-                draw.text((TEXT_PAD_LEFT, y), label_text, font=body, fill=1)
-                draw.text((52, y), value, font=body, fill=1)
-                y += line_h
+            # Big target number centered
+            target_str = str(new)
+            tw = _text_width(draw, target_str, big_font)
+            draw.text(((w - tw) // 2, 30), target_str, font=big_font, fill=1)
+
+            # Change annotation below
+            chg_str = f"{change:+d}" if change != 0 else "±0"
+            cw = _text_width(draw, chg_str, body)
+            draw.text(((w - cw) // 2, 64), chg_str, font=body, fill=1)
+
+            # "from {current}" small at bottom
+            from_str = f"from {current}"
+            fw = _text_width(draw, from_str, body)
+            draw.text(((w - fw) // 2, 84), from_str, font=body, fill=1)
         else:
-            draw.text((TEXT_PAD_LEFT, 40), label, font=body, fill=1)
+            # Waiting for Sonos volume read — show pending change
+            wait_str = f"{change:+d}%"
+            ww = _text_width(draw, wait_str, big_font)
+            draw.text(((w - ww) // 2, 36), wait_str, font=big_font, fill=1)
+            dots = "reading…"
+            dw = _text_width(draw, dots, body)
+            draw.text(((w - dw) // 2, 72), dots, font=body, fill=1)
 
         show_image(self._disp, img, invert=self._invert)
         if sys.stdout.isatty():
