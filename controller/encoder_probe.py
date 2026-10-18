@@ -24,12 +24,12 @@ import signal
 import sys
 import time
 
-# Interim role map (matches main.py). Populate all four Bourns on #5752.
+# Left → right on the board / box: source, volume, skip, rooms
 ENCODERS = [
     {"name": "MUSIC", "slot": 0, "sw_pin": 12},
-    {"name": "ROOMS", "slot": 1, "sw_pin": 14},
-    {"name": "VOL",   "slot": 2, "sw_pin": 17},
-    {"name": "SKIP",  "slot": 3, "sw_pin": 9},
+    {"name": "VOL",   "slot": 1, "sw_pin": 14},
+    {"name": "SKIP",  "slot": 2, "sw_pin": 17},
+    {"name": "ROOMS", "slot": 3, "sw_pin": 9},
 ]
 
 

@@ -15,8 +15,8 @@ DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", "144"))
 DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "168"))
 
 SIM_HELP = """  Controls
-  j/k music   enter load   ,/. rooms   a apply
-  [/] skip    space ▶❚❚    +/- vol     m mute
+  j/k source  enter load   +/- vol   m mute
+  [/] skip    space ▶❚❚    ,/. rooms  a apply
   q or ^C = quit"""
 
 if not SIMULATE:
@@ -274,6 +274,79 @@ class Display:
         show_image(self._disp, img, invert=self._invert)
         if sys.stdout.isatty():
             print(f"[display] vol {label}", flush=True)
+
+    def render_transport(self, previous, current, nxt, direction=0):
+        """
+        Skip / now-playing pane.
+        previous/current/nxt: display strings or None.
+        direction: -1 prev skip, +1 next skip, 0 unknown.
+        """
+        self._view = "transport"
+        prev_s = previous or "—"
+        cur_s = current or "(unknown)"
+        next_s = nxt or "—"
+        arrow = "‹" if direction < 0 else ("›" if direction > 0 else "·")
+        if SIMULATE:
+            self.sim_log(f"skip {arrow}")
+            self.sim_log(f"  was  {prev_s}")
+            self.sim_log(f"  now  {cur_s}")
+            self.sim_log(f"  next {next_s}")
+            # also refresh the sim screen like list does
+            os.system("clear")
+            print(SIM_HELP)
+            print()
+            with self._sim_lock:
+                hist = list(self._sim_history)
+            if hist:
+                print("  ── log ─────────────────────────────")
+                for line in hist:
+                    print(f"  {line}")
+                print()
+            print("  Skip")
+            print("  " + "─" * 30)
+            print(f"  ‹ {prev_s}")
+            print(f"  ▶ {cur_s}")
+            print(f"  › {next_s}")
+            return
+
+        w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
+        img = Image.new("1", (w, h), 0)
+        draw = ImageDraw.Draw(img)
+        header_font = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11
+        )
+        body = self._list_font
+        small = ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11
+        )
+        text_w = self._list_text_width()
+
+        header = "Skip" if direction == 0 else ("Prev" if direction < 0 else "Next")
+        draw.text((TEXT_PAD_LEFT, 2), header, font=header_font, fill=1)
+        draw.line([(0, 14), (w - 1, 14)], fill=1, width=1)
+
+        # three rows: previous, current (highlighted), next
+        rows = [
+            (f"‹ {prev_s}", False),
+            (f"▶ {cur_s}", True),
+            (f"› {next_s}", False),
+        ]
+        line_h = 36
+        y0 = 20
+        for i, (text, hi) in enumerate(rows):
+            y = y0 + i * line_h
+            if hi:
+                draw.rectangle([(0, y - 2), (w - 1, y + line_h - 6)], fill=1)
+                # wrap-ish: show up to two lines inverted
+                fitted = _fit_text(draw, text, body, text_w)
+                draw.text((TEXT_PAD_LEFT, y), fitted, font=body, fill=0)
+            else:
+                fitted = _fit_text(draw, text, small, text_w)
+                draw.text((TEXT_PAD_LEFT, y + 4), fitted, font=small, fill=1)
+
+        show_image(self._disp, img, invert=self._invert)
+        if sys.stdout.isatty():
+            print(f"[display] skip {arrow} now={cur_s}", flush=True)
 
     def clear(self):
         """Blank the panel (Sharp memory displays hold the last frame until updated)."""

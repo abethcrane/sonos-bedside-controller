@@ -69,7 +69,7 @@ I2C address: **0x49**. Slot map (target product labels left-to-right):
 | **#2** | **VOL** — volume / press mute·unmute |
 | **#3** | **SKIP** (transport) — prev·next / press play·pause |
 
-**Interim bench wiring** (keep MUSIC on the populated slot you already use): `#0 MUSIC (sw 12)`, `#1 ROOMS (sw 14)`, `#2 VOL (sw 17)`, `#3 SKIP (sw 9)`. Soft-label order on HDMI can still read ROOMS·MUSIC·VOL·SKIP left-to-right later.
+**Interim bench wiring** (left → right on the box): `#0 MUSIC/source (sw 12)`, `#1 VOL (sw 14)`, `#2 SKIP (sw 17)`, `#3 ROOMS (sw 9)`. Product soft-label order on HDMI may still be ROOMS·MUSIC·VOL·SKIP later.
 
 **Bench test:** `sudo i2cdetect -y 1` → `0x49`, then `python encoder_probe.py` (all four slots).
 

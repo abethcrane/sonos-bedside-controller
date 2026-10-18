@@ -50,7 +50,7 @@ cd controller
 python main.py
 ```
 
-Keyboard: `j`/`k` music, Enter load, `,`/`.` rooms, `a` apply preset, `[`/`]` skip, Space play/pause, `+`/`-` volume, `m` mute. Config UI: http://localhost:8080/ui
+Keyboard: `j`/`k` source, Enter load, `+`/`-` volume, `m` mute, `[`/`]` skip, Space play/pause, `,`/`.` rooms, `a` apply. Config UI: http://localhost:8080/ui
 
 ---
 
@@ -268,14 +268,14 @@ Encoder wiring is in [`plan.md`](plan.md).
 | **D** (SDA) | SDA1 | 3 |
 | **C** (SCL) | SCL1 | 5 |
 
-I2C address: **0x49** (default). Interim slot map (seesaw switch pins):
+I2C address: **0x49** (default). Interim slot map (seesaw switch pins), left → right:
 
 | Slot | Switch pin | Role | Turn | Press |
 |------|------------|------|------|-------|
-| **0** | 12 | **MUSIC** | scroll favorites | load & play |
-| **1** | 14 | **ROOMS** | scroll room presets | apply preset |
-| **2** | 17 | **VOL** | volume | mute / unmute |
-| **3** | 9 | **SKIP** | prev / next track | play / pause |
+| **0** | 12 | **MUSIC** (source) | scroll favorites | load & play |
+| **1** | 14 | **VOL** | volume | mute / unmute |
+| **2** | 17 | **SKIP** | prev / next track | play / pause |
+| **3** | 9 | **ROOMS** | scroll room presets | apply preset |
 
 Requires I2C enabled (`sudo raspi-config` → Interface Options → I2C).
 

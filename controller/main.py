@@ -8,8 +8,8 @@ Encoder architecture (Pi + USE_ENCODERS):
   - Sonos volume: local absolute target (instant UI) + rate-limited absolute sets mid-spin.
     Session soft-cap and VOLUME_MAX stop a fast crank from jumping too loud.
 
-Interim slot map (#5752 @ 0x49):
-  0 MUSIC  1 ROOMS  2 VOL  3 SKIP
+Interim slot map (#5752 @ 0x49), left → right:
+  0 MUSIC (source)  1 VOL  2 SKIP  3 ROOMS
 
 Keyboard/Mac path calls the same actions but renders immediately (no I2C).
 """
@@ -38,6 +38,7 @@ from sonos import (
     get_group_volume,
     get_groups,
     get_household_and_group,
+    get_now_playing,
     get_playlists,
     get_favorites,
     item_artist_name,
@@ -132,8 +133,13 @@ group_id = None
 display  = Display()
 
 # UI mode: one Sharp pane at a time
-_ui_mode = "music"  # music | rooms | volume
+_ui_mode = "music"  # music | rooms | volume | transport
 _muted = False
+# Track memory for skip pane (Sonos metadata has current + next, not previous)
+_track_current = None
+_track_prev = None
+_track_next = None
+_skip_direction = 0  # -1 / +1 for last skip
 
 # Volume: local absolute target (UI) trails onto Sonos with rate limiting.
 _vol_applied = None          # last level we believe Sonos has / last absolute set
@@ -239,7 +245,7 @@ def _paint_list():
         return
     _reset_volume_session()
     _set_mode("music")
-    display.render_list(ordered, selected, header="Music")
+    display.render_list(ordered, selected, header="Source")
 
 
 def _paint_rooms():
@@ -255,13 +261,55 @@ def _paint_rooms():
     display.render_list(room_presets, room_selected, header="Rooms")
 
 
+def _paint_transport():
+    _reset_volume_session()
+    _set_mode("transport")
+    display.render_transport(
+        _track_prev, _track_current, _track_next, direction=_skip_direction
+    )
+
+
 def _paint_current():
     if _ui_mode == "rooms":
         _paint_rooms()
     elif _ui_mode == "volume":
         _paint_volume()
+    elif _ui_mode == "transport":
+        _paint_transport()
     else:
         _paint_list()
+
+
+def _remember_tracks(now_playing):
+    """Update prev/current/next labels from a get_now_playing() dict."""
+    global _track_current, _track_prev, _track_next
+    cur = now_playing.get("current")
+    nxt = now_playing.get("next")
+    if cur and cur != _track_current:
+        if _track_current:
+            _track_prev = _track_current
+        _track_current = cur
+    elif cur:
+        _track_current = cur
+    if nxt is not None or now_playing.get("current") is not None:
+        # next may be absent (radio) — clear so we don't show a stale track
+        _track_next = nxt
+
+
+def _refresh_now_playing(direction=0):
+    """Fetch metadata and show transport pane. direction: last skip sense."""
+    global _skip_direction
+    _skip_direction = direction
+    if group_id is None:
+        _paint_transport()
+        return
+    try:
+        np = get_now_playing(group_id)
+        _remember_tracks(np)
+    except Exception as e:
+        display.sim_log(f"now-playing failed: {e}")
+        print(f"now-playing failed: {e}", flush=True)
+    _paint_transport()
 
 
 def _vol_pct_for_delta(delta):
@@ -695,7 +743,7 @@ def do_play_pause():
     except Exception as e:
         display.sim_log(f"play/pause failed: {e}")
         print(f"play/pause failed: {e}", flush=True)
-    _paint_current()
+    _refresh_now_playing(direction=0)
 
 
 def toggle_mute():
@@ -739,20 +787,26 @@ def skip_track(delta):
 
 
 def do_skip(delta):
+    global _track_prev
     label = "next" if delta > 0 else "prev"
     display.sim_log(f"skip {label}")
+    # Snapshot current as "was" before the skip lands (API has no previous track).
+    if _track_current and delta > 0:
+        _track_prev = _track_current
     try:
         if delta > 0:
             skip_to_next_track(group_id)
         else:
             skip_to_previous_track(group_id)
+        # Metadata can lag a beat after skip.
+        time.sleep(0.25)
     except SonosError as e:
         display.sim_log(f"skip no-op: {e.reason}")
         print(f"Skip failed ({e.error_code}): {e.reason}", flush=True)
     except Exception as e:
         display.sim_log(f"skip failed: {e}")
         print(f"Skip failed: {e}", flush=True)
-    _paint_current()
+    _refresh_now_playing(direction=+1 if delta > 0 else -1)
 
 def _refresh_household(keep_group=True):
     """Refresh hh_id; keep current group_id when it still exists."""
@@ -874,19 +928,20 @@ def main():
             print(SIM_HELP)
 
         if USE_ENCODERS:
+            # Left → right: source, volume, skip, rooms
             enc_music = Encoder(
                 slot=0, sw_pin=12, on_rotate=scroll, on_press=select
             )
-            enc_rooms = Encoder(
-                slot=1, sw_pin=14, on_rotate=scroll_rooms, on_press=apply_rooms
-            )
             enc_vol = Encoder(
-                slot=2, sw_pin=17, on_rotate=volume, on_press=toggle_mute
+                slot=1, sw_pin=14, on_rotate=volume, on_press=toggle_mute
             )
             enc_skip = Encoder(
-                slot=3, sw_pin=9, on_rotate=skip_track, on_press=toggle_play_pause
+                slot=2, sw_pin=17, on_rotate=skip_track, on_press=toggle_play_pause
             )
-            for enc in (enc_music, enc_rooms, enc_vol, enc_skip):
+            enc_rooms = Encoder(
+                slot=3, sw_pin=9, on_rotate=scroll_rooms, on_press=apply_rooms
+            )
+            for enc in (enc_music, enc_vol, enc_skip, enc_rooms):
                 enc.reset()
 
             while True:
@@ -895,9 +950,9 @@ def main():
                 if should_apply_rooms():
                     maybe_apply_active_rooms()
                 enc_music.poll()
-                enc_rooms.poll()
                 enc_vol.poll()
                 enc_skip.poll()
+                enc_rooms.poll()
                 process_encoder_ui()
                 with _input_lock:
                     mode = _ui_mode

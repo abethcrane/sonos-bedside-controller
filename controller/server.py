@@ -379,7 +379,7 @@ UI_HTML = """<!DOCTYPE html>
 
 <div class="panel rooms-panel">
   <div class="panel-title">Room presets</div>
-  <p class="sub" style="margin-bottom:12px">Named groups of rooms. Device ROOMS knob scrolls these; press applies and persists.</p>
+  <p class="sub" style="margin-bottom:12px">Named groups of rooms. Rightmost knob (ROOMS) scrolls these; press applies and persists.</p>
   <div id="room-presets"></div>
   <div class="save-bar" style="margin-top:12px">
     <button class="secondary" onclick="addPreset()">+ preset</button>

@@ -357,6 +357,33 @@ def get_favorites(household_id):
 def get_playback_metadata(group_id):
     return _get(f"/groups/{group_id}/playbackMetadata")
 
+def _track_label(item):
+    """Human label from a metadata item ({track: {name, artist}})."""
+    if not item:
+        return None
+    track = item.get("track") or {}
+    name = (track.get("name") or "").strip()
+    artist = ((track.get("artist") or {}).get("name") or "").strip()
+    if name and artist:
+        return f"{name} · {artist}"
+    return name or artist or None
+
+def get_now_playing(group_id):
+    """
+    Current + next track labels from playbackMetadata.
+    Sonos does not expose previous-track metadata here — only nextItem.
+    Returns {current, next, container} (strings or None).
+    """
+    meta = get_playback_metadata(group_id)
+    current = _track_label(meta.get("currentItem"))
+    if not current:
+        current = (meta.get("streamInfo") or "").strip() or None
+    if not current:
+        current = ((meta.get("container") or {}).get("name") or "").strip() or None
+    nxt = _track_label(meta.get("nextItem"))
+    container = ((meta.get("container") or {}).get("name") or "").strip() or None
+    return {"current": current, "next": nxt, "container": container}
+
 def load_favorite(group_id, favorite_id):
     resp = _post(f"/groups/{group_id}/favorites",
                  {"favoriteId": favorite_id, "playOnCompletion": True, "action": "REPLACE"})
