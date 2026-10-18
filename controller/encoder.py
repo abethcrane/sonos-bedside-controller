@@ -58,6 +58,13 @@ class Encoder:
         self._last_pos = self._enc.position
         print(f"[encoder] slot {slot} ready (switch pin {sw_pin})")
 
+    def reset(self):
+        """Discard any position accumulated since init. Call before main loop."""
+        if SIMULATE:
+            return
+        self._last_pos = self._enc.position
+        self._sw_down_at = None
+
     def poll(self):
         """Read encoder position + button. Call from main loop."""
         if SIMULATE:
@@ -65,26 +72,29 @@ class Encoder:
 
         now = time.monotonic()
 
-        # ── rotation ──────────────────────────────────────────────────────
-        pos = self._enc.position
-        if pos != self._last_pos:
-            delta = pos - self._last_pos
-            # handle 32-bit signed overflow
-            if delta > 0x7FFFFFFF:
-                delta -= 0x100000000
-            elif delta < -0x80000000:
-                delta += 0x100000000
-            self._last_pos = pos
-            self._last_rotate_at = now
-            self.on_rotate(delta)
+        try:
+            # ── rotation ──────────────────────────────────────────────────
+            pos = self._enc.position
+            if pos != self._last_pos:
+                delta = pos - self._last_pos
+                # handle 32-bit signed overflow
+                if delta > 0x7FFFFFFF:
+                    delta -= 0x100000000
+                elif delta < -0x80000000:
+                    delta += 0x100000000
+                self._last_pos = pos
+                self._last_rotate_at = now
+                self.on_rotate(delta)
 
-        # ── button ────────────────────────────────────────────────────────
-        pressed = not self._sw.value
-        if pressed and self._sw_down_at is None:
-            self._sw_down_at = now
-        elif not pressed and self._sw_down_at is not None:
-            held = now - self._sw_down_at
-            self._sw_down_at = None
-            if held >= MIN_HOLD_S and (now - self._last_press_at) >= MIN_BETWEEN_PRESS_S:
-                self._last_press_at = now
-                self.on_press()
+            # ── button ────────────────────────────────────────────────────
+            pressed = not self._sw.value
+            if pressed and self._sw_down_at is None:
+                self._sw_down_at = now
+            elif not pressed and self._sw_down_at is not None:
+                held = now - self._sw_down_at
+                self._sw_down_at = None
+                if held >= MIN_HOLD_S and (now - self._last_press_at) >= MIN_BETWEEN_PRESS_S:
+                    self._last_press_at = now
+                    self.on_press()
+        except OSError as e:
+            print(f"[encoder] I2C error: {e}", flush=True)

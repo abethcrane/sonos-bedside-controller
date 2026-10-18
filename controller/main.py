@@ -489,6 +489,9 @@ def main():
             enc_vol = Encoder(
                 slot=2, sw_pin=17, on_rotate=volume, on_press=toggle_play_pause
             )
+            # discard any position accumulated during Sonos startup
+            enc_list.reset()
+            enc_vol.reset()
 
             while True:
                 if should_reload():
