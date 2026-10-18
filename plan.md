@@ -4,7 +4,11 @@ This project is already set up for:
 
 - A **config-driven list** of launchable items (`controller/config.json` with `items[]`)
 - A local **config web UI** at `/ui` and JSON endpoints (`/items`, `/browse`, `/reload`)
-- A runtime loop testable on **macOS** (keyboard) and on **Pi** (GPIO encoders + Sharp SPI display)
+- A runtime loop testable on **macOS** (keyboard) and on **Pi** (I2C encoders + display)
+
+**Product target (locked):** 4 labeled knobs, no long-press, HDMI color display above the dials, room **presets**, soft on-screen labels aligned to each knob.
+
+**Current bench (interim):** Pi Zero W v1.1 + Adafruit Sharp #3502 (1.3" 144×168) + 2 encoders on Adafruit #5752. Keep shipping iterative UX on this while parts arrive.
 
 ---
 
@@ -12,40 +16,42 @@ This project is already set up for:
 
 Rough US-style street prices; shop around.
 
-**Current dev setup (2026):** Pi Zero W v1.1 + **Adafruit Sharp #3502** (1.3" 144×168). **Target:** Pi Zero 2 WH + Sharp #4694 (2.7" 400×240).
+**Target:** Pi Zero 2 WH + **no-touch HDMI** 5" (or 4–5" IPS HDMI used without touch) + **4×** Bourns on Adafruit #5752 + wood box.
 
 | Part | Source | ~Price |
 |------|--------|--------|
-| **Raspberry Pi Zero 2 W** (with **pre-soldered GPIO header** — often sold as **Zero 2 WH**) — *upgrade path when in stock* | Adafruit / Pimoroni / authorized resellers | ~$15 |
-| **Adafruit Sharp Memory Display 2.7"** 400×240 — **product #4694** specifically — *target; often OOS* | [adafruit.com](https://www.adafruit.com) | ~$25 |
-| **Smaller Sharp** (e.g. 2.13" 250×122 or 1.3" — **match Adafruit wiring guide for that SKU**) | Adafruit | ~$20–25 |
-| **KY-040 rotary encoder module** ×2 (breakout with CLK / DT / SW / + / GND) — e.g. [Amazon B07T3672VK](https://www.amazon.com/dp/B07T3672VK) | Amazon | ~$6 |
-| **Premium knob caps** ×2 (e.g. Nanu Arc or similar) | nanu.design / Amazon | ~$20 |
-| **MicroSD card** 16 GB+ (Class 10 / A1 fine) | Amazon | ~$8 |
-| **Power supply** — **USB-C 5 V / 2.5 A** for Zero 2 W; **Pi Zero W v1.1** uses **micro-USB** (still aim for a decent 5 V / 2+ A supply) | Amazon | ~$10 |
-| **Dupont jumpers** + small **perfboard** (clean wiring, not a rat's nest in the box) | Amazon / Adafruit | ~$5 |
+| **Raspberry Pi Zero 2 W** (with **pre-soldered GPIO header** — **Zero 2 WH**) | Adafruit / Pimoroni / authorized resellers | ~$15 |
+| **Display (primary):** [Adafruit HDMI 4 Pi: 5" (no Touch) #1928](https://www.adafruit.com/product/1928) — 800×480, HDMI driver board, USB 5V, **no touch** — *often OOS; check DigiKey/Mouser* | Adafruit | ~$60 |
+| **Display (fallback):** Waveshare **4"** or **5"** HDMI IPS (800×480 or 480×800 landscape) — connect **HDMI only**; do **not** wire/enable touch | Waveshare / Pi Hut / Amazon | ~$40–55 |
+| **Display (alt embed):** Eyoyo-style 5" mini HDMI monitor (no touch) — easier to buy, metal chassis harder to flush-mount | Amazon | ~$50–60 |
+| **Adafruit I2C Quad Rotary Encoder Breakout #5752** + **Bourns PEC11R-4215F-S0024** ×4 (all four slots) | Adafruit | ~$25–35 |
+| **Premium knob caps** ×4 (e.g. Nanu Arc or similar) | nanu.design / Amazon | ~$40 |
+| **MicroSD** 16 GB+ (Class 10 / A1) | Amazon | ~$8 |
+| **Power** — USB-C **5 V / 2.5 A+** for Zero 2 W (display may need its own USB 5V) | Amazon | ~$10–15 |
+| **Mini-HDMI** cable/adapter (Zero → panel) + duponts / perfboard | Amazon / Adafruit | ~$10 |
 
-**Electronics subtotal: ~$92**
+**Electronics subtotal: ~$160–200** depending on display stock and knobs.
 
 ### Enclosure (pick one)
 
 | Option | Effort | ~Cost |
 |--------|--------|-------|
-| Bamboo/wood **project box** (Etsy / AliExpress) + drill for screen + knobs | Low | ~$20 |
-| **3D-printed** shell + wood veneer film | Medium | ~$25 |
-| **Hand-cut** walnut (or similar) from scratch | High | ~$20 materials |
+| Bamboo/wood **project box** + cutout for screen above, 4 knob holes below | Low–med | ~$25–40 |
+| **3D-printed** shell + wood veneer | Medium | ~$25 |
+| **Hand-cut** walnut (or similar) | High | ~$20+ materials |
 
-**Grand total (device + box): ~$110–120** depending on enclosure.
+Layout: **screen on top, four knobs in a row under it** so on-screen soft labels line up with each dial.
 
 ### Ordering gotchas
 
-1. **Pi Zero 2 W with headers** — look for **Zero 2 WH** or explicit "with header soldered" so you skip soldering the 40-pin yourself. **Pi Zero W (v1.1)** is fine to start: same 40-pin GPIO and SPI0; it is **slower** and has **512 MB RAM** — watch memory if you add heavy services. Power is **micro-USB**, not USB-C. **Headers:** a bare Zero W needs a **soldered 40-pin male header** (or buy a **v1.1 with header** if in stock and you want to skip that step — same board, convenience only).
-2. **Sharp display** — Adafruit has several Sharp panels; **#4694** is the 2.7" 400×240 **target** for this stack. Smaller panels use different resolutions and sometimes different **CS/DC/RST** pinouts — follow the **product page wiring** and align `display.py` dimensions.
-3. **Encoders** — Bourns PEC11R-4215F-S0024 (24 detent, push switch, ≤2ms bounce) soldered onto an [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752). The seesaw chip handles quadrature decoding and debounce in hardware; Pi reads position over I2C. Replaces the original KY-040 modules which had inconsistent signal quality.
+1. **Pi Zero 2 WH** — headers pre-soldered. Zero has **no DSI**; use **HDMI** (mini-HDMI). Interim Zero W v1.1 is fine for software (slower, micro-USB power).
+2. **Prefer no-touch panels** for a knob-only box. Waveshare HDMI kits usually include touch — leave it disconnected. Avoid **SPI** PiTFTs (slow list scroll — why we're leaving Sharp). Avoid **DPI/HyperPixel** (eats GPIO; fights I2C encoders).
+3. **Night dimming** — plan PWM backlight (many Waveshare panels: pad → GPIO 18). Adafruit #1928 has OSD buttons for brightness; confirm software dim path when integrating.
+4. **Encoders** — populate all four slots on #5752. Seesaw @ **0x49** over I2C; 4 wires for the whole bank.
 
-### Pi ↔ peripherals wiring (matches `controller/main.py`)
+### Pi ↔ peripherals wiring
 
-**Encoders — [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752)** with Bourns PEC11R-4215F-S0024 soldered into positions #0 (playlist) and #1 (volume). Connected to Pi via I2C — **4 dupont wires total** for both encoders.
+**Encoders — [Adafruit #5752](https://www.adafruit.com/product/5752)** (I2C), four Bourns PEC11R:
 
 | Board pad | Pi | Physical pin |
 |-----------|-----|--------------|
@@ -54,53 +60,53 @@ Rough US-style street prices; shop around.
 | **D** (SDA) | SDA1 | 3 |
 | **C** (SCL) | SCL1 | 5 |
 
-I2C address: **0x49** (default, no jumpers cut). Encoder positions: **#0** = playlist scroll + select, **#1** = volume + play/pause.
+I2C address: **0x49**. Slot map (target):
 
-**Bench test:** `sudo i2cdetect -y 1` (should show `0x49`), then `python encoder_probe.py` on the Pi.
+| Slot | Role |
+|------|------|
+| **#0** | **ROOMS** — scroll presets / press apply |
+| **#1** | **MUSIC** — scroll favorites / press load & play |
+| **#2** | **VOL** — volume / press mute·unmute |
+| **#3** | **SKIP** (transport) — prev·next / press play·pause |
 
-**Sharp display (SPI)** — silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 · VIN**
+**Bench test:** `sudo i2cdetect -y 1` → `0x49`, then `python encoder_probe.py` (extend probe for four slots).
 
-| Display pin | Wire | Pi | BCM GPIO | Physical pin |
-|-------------|------|-----|----------|--------------|
-| VIN | Orange | 3.3V | — | 1 |
-| DISP | Orange | 3.3V | — | 17 |
-| GND | Blue | GND | — | 25 |
-| EMD | Blue | GND | — | 20 |
-| CLK | Red | GPIO | 11 | 23 |
-| DI | Yellow | GPIO | 10 | 19 |
-| CS | Green | GPIO | 6 | 31 |
-| EIN, 3v3 | — | NC | — | — |
+**Display — HDMI** (not SPI Sharp). Power per panel docs (often separate USB 5V). Mini-HDMI from Zero. **GPIO stays free** for backlight PWM + I2C encoders.
 
-Full table in [README.md](README.md#hardware-wiring). Display **CS = GPIO 6 (pin 31)**.
+**Interim Sharp SPI wiring** (current bench only) — see [README.md](README.md#hardware-wiring); CS = GPIO 6. Do not treat Sharp as the product target.
 
 ### Network / config from a Mac
 
-On the Pi, run the Flask app (port **8080** in current code). Use **mDNS** so the box is reachable as something like **`http://sonos-box.local:8080/ui`** to edit playlists without USB. Same JSON API works from `curl` or scripts.
+Flask on port **8080**. Prefer mDNS: **`http://sonos-box.local:8080/ui`**. Same JSON API via `curl`.
 
 ---
 
-## Chosen control mapping (two encoders only)
+## Chosen control mapping (four encoders, no long-press)
 
-No extra skip button: **long-press on the volume/play-pause encoder** = **next track (skip)**. Single short press = play/pause as today.
+No long-press. Each knob has one job: **turn** + **short press**.
 
-**Room presets:** **long-press the playlist encoder** to enter **room change mode**; **long-press the same encoder again** to exit back to normal (playlist browse / now-playing flow). While in room mode, **rotate** that encoder to move through presets; **short press** to confirm the highlighted preset as active (exact confirm gesture can match whatever feels best in hardware testing).
+| Knob | Label | Turn | Press |
+|------|-------|------|-------|
+| **Rooms** | `ROOMS` | Scroll room **presets** | Apply highlighted preset |
+| **Music** | `MUSIC` | Scroll favorites / playlists | Load & play selection |
+| **Vol** | `VOL` | Volume up/down (also unmutes if muted) | **Mute / unmute** |
+| **Transport** | `SKIP` | Previous / next track | Play / pause |
 
-| Encoder | Rotate | Short press | Long press |
-|---------|--------|-------------|------------|
-| **A (playlist)** | Scroll list / in room mode: scroll presets | Load & play selected item / confirm preset | Toggle **room change mode** on ↔ off |
-| **B (volume)** | Volume up/down | Play / pause | **Skip** (next track) |
+Shuffle / rare actions: later (e.g. double-tap Music) or `/ui` only — not long-press.
 
 **Implementation notes**
 
-- Use a small **press state machine**: debounce, **long-press threshold** (~600–800 ms — tune on hardware), release handling so short vs long doesn't misfire.
-- On-screen **hold feedback** (bar or "Hold… skip" / "Rooms") so long-press actions never feel ambiguous.
+- Debounced short press only; no hold state machine for v1 product UX.
+- Mute: press Vol → muted; turn Vol or press again → unmute (turn applies Δ from current level after unmute).
+- Transport skip may no-op on radio/line-in; show a brief toast.
 
 ---
 
 ## Room presets: what "select rooms" means
 
 - Playback targets a **Sonos group**; presets are named groups of **rooms/players** (e.g. "All", "Bedroom", "Kitchen + Living + Bath").
-- Same idea as playlists: **editable in config** and ideally in `/ui` later.
+- Same idea as playlists: **editable in config** and `/ui`.
+- **Not** on-device multi-select checkbox grouping for v1 — presets only.
 
 ### Proposed config shape (JSON)
 
@@ -118,27 +124,55 @@ No extra skip button: **long-press on the volume/play-pause encoder** = **next t
 }
 ```
 
-- `rooms[]` should resolve to stable Sonos identifiers (names or player IDs from discovery) once implemented.
-- **Persist** `active_room_preset` across reboots unless you explicitly want "session only."
+- `rooms[]` → stable Sonos identifiers (names or player IDs) once discovery is wired.
+- **Persist** `active_room_preset` across reboots unless you explicitly want session-only.
 
 ---
 
-## Screen UX: now playing vs browse
+## Screen UX: chrome + one active menu
 
-**Default:** **Now playing** (or idle) view — room preset, play state, volume, track title/artist when available.
+**Philosophy:** status always visible; **one** interactive list at a time (whichever dial was last turned). No nested settings menus on-device.
 
-**Browse:** Rotating **encoder A** opens or refreshes the **playlist list** overlay; after **~6–10 s** without A activity, fall back to now playing.
+**Always-on chrome (header)**
 
-**States (conceptual)**
+- Active room preset name  
+- Play state + volume % + muted indicator  
+- Now playing: title · artist (marquee if needed)
 
-- `NOW_PLAYING` — idle home screen  
-- `BROWSE_LIST` — playlist list; A rotates selection, A short press loads  
-- `ROOM_CHOOSER` — entered/exited by **long-press A**; A rotates among presets, short press confirms  
-- Toasts — errors, "Preset: Downstairs", volume tick, etc.
+**Soft label row (footer)** — fixed, aligned to the four physical knobs:
 
-**Encoder B** — volume and play/pause should not force leaving browse unless you decide otherwise; long-press B = skip, with visible hold progress.
+`ROOMS · MUSIC · VOL · SKIP`
 
-**Footer hint (example):** `Hold A: rooms · Hold B: skip`
+Highlight the label for the **active** dial (last touched). Optional tiny press hint under each label (`apply` / `play` / `mute` / `▶❚❚`).
+
+**Middle (interactive)**
+
+| Last dial | Middle content |
+|-----------|----------------|
+| Rooms | Preset list; highlight moves with turn |
+| Music | Favorites list |
+| Vol | Optional large volume focus (or chrome-only) |
+| Transport | No list — flash prev/next / update track in chrome |
+
+After a few seconds idle on a list dial → collapse middle to chrome-only (calm bedside).
+
+**Rough layout**
+
+```
+┌─────────── Downstairs · ▶ · 42% ───────────┐
+│  GET HAPPY! · Some Artist                  │
+├────────────────────────────────────────────┤
+│  > Downstairs                              │  ← only while Rooms active
+│    Bedroom                                 │
+│    All                                     │
+├─────────┬─────────┬─────────┬──────────────┤
+│ ROOMS   │ MUSIC   │  VOL    │    SKIP      │
+│ active  │         │         │              │
+└─────────┴─────────┴─────────┴──────────────┘
+      (o)       (o)       (o)        (o)
+```
+
+**4" vs 5":** both fine for chrome + one list + four labels. 5" breathes more; 4" keeps the box tighter. Do **not** show Rooms + Music lists at once unless the panel is large enough that it stays readable (optional later).
 
 ---
 
@@ -151,10 +185,11 @@ Extend `/ui` (and JSON API) the same way as playlists:
 
 ---
 
-## Future upgrades (not required for v1)
+## Future upgrades (not required for core)
 
-- **Recessed bezel + LED strip** around the Sharp LCD for a soft glow (separate power/layout planning; Sharp is reflective — lighting is aesthetic, not backlight).
-- **Jellyfin → Sonos** is a separate ecosystem: native paths are messier than first-party music; options include community **Jellyfin Sonos / SMAPI**-style plugins (often need HTTPS reachable to speakers), **DLNA** paths (format quirks), or **Plex** if you want the smoothest official Sonos integration. Treat as **future work**, not part of this box's core scope.
+- Recessed bezel / subtle face lighting (separate from display backlight).
+- On-device shuffle gesture; alarm / wake integration with house lighting.
+- **Jellyfin → Sonos** — separate ecosystem; treat as future work.
 
 ---
 
@@ -162,8 +197,10 @@ Extend `/ui` (and JSON API) the same way as playlists:
 
 | Topic | Decision |
 |-------|----------|
-| Hardware core | **Now:** Pi Zero W v1.1 + smaller Sharp; **Target:** Pi Zero 2 WH, Sharp #4694 — Bourns PEC11R on Adafruit #5752 I2C breakout, knobs, SD, supply, duponts |
-| Skip | **Long-press** encoder B (play/pause knob) |
-| Rooms | **Long-press** encoder A to enter room mode; **long-press A again** to exit; rotate to choose, short press to confirm |
-| Screen | Default **now playing**; playlist browse as **timeout overlay** |
-| Editing lists | **`/ui` on LAN** (+ optional USB/Ethernet same network) |
+| Hardware core | **Target:** Pi Zero 2 WH + **no-touch HDMI** 5" (#1928) or Waveshare 4–5" HDMI (touch unused) + **4×** Bourns on Adafruit #5752. **Interim:** Zero W + Sharp #3502 + 2 encoders |
+| Knobs | **ROOMS / MUSIC / VOL / SKIP** — turn + short press only; **no long-press** |
+| Vol press | **Mute / unmute**; turn adjusts level (unmutes if needed) |
+| Transport | Turn = prev/next; press = play/pause |
+| Rooms | **Presets** only; scroll + press apply |
+| Screen | HDMI color, good refresh; **chrome always** + **one active menu** + soft labels over knobs |
+| Editing lists | **`/ui` on LAN** |
