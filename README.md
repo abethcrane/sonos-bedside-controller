@@ -50,7 +50,7 @@ cd controller
 python main.py
 ```
 
-Keyboard: `j`/`k` source, Enter load, `+`/`-` volume, `m` mute, `[`/`]` skip, Space play/pause, `,`/`.` rooms, `a` apply. Config UI: http://localhost:8080/ui
+Keyboard: `j`/`k` source, Enter load, `+`/`-` volume, `m` mute, `[`/`]` skip, Space play/pause, `,`/`.` rooms, `a` apply, `1`–`4` focus pane. Config UI: http://localhost:8080/ui
 
 ---
 
@@ -313,8 +313,9 @@ The seesaw chip on the Adafruit breakout counts detents in hardware, so there is
        ▼
   encoder.py (I2C poll)           ← reads position delta + button state
        │
-      ├─ rotate → scroll music/rooms / volume / skip
-      └─ press  → queue select / apply / mute / play_pause
+      ├─ rotate     → scroll music/rooms / volume / skip
+      ├─ short press → queue select / apply / mute / play_pause
+      └─ long press  → focus that dial’s Sharp pane (no Sonos action)
        │
        ▼
   main loop every ~20ms: process_encoder_ui()

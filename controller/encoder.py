@@ -4,8 +4,11 @@ Rotary encoder input via Adafruit I2C Quad Rotary Encoder Breakout (#5752).
 The seesaw chip handles quadrature decoding in hardware — no GPIO timing
 sensitivity, no missed edges during SPI redraws.
 
-Button: polled, emits on release after minimum hold, with cooldown between
-presses. Pull-up enabled on the seesaw so the pin doesn't float on release.
+Button: polled.
+  - short press → on_press (on release)
+  - long press  → on_long_press (fires once while held; suppresses short press)
+
+Pull-up enabled on the seesaw so the pin doesn't float on release.
 
 Call poll() from the main loop (~5–20ms).
 """
@@ -23,6 +26,7 @@ if not SIMULATE:
 
 SEESAW_ADDR = int(os.environ.get("SEESAW_ADDR", "0x49"), 0)
 MIN_HOLD_S = float(os.environ.get("ENCODER_MIN_HOLD_S", "0.05"))
+LONG_PRESS_S = float(os.environ.get("ENCODER_LONG_PRESS_S", "0.55"))
 MIN_BETWEEN_PRESS_S = float(os.environ.get("ENCODER_MIN_BETWEEN_S", "0.30"))
 STUCK_PRESS_S = 5.0  # re-apply pull-up if "pressed" this long (seesaw reset)
 
@@ -39,11 +43,13 @@ def _get_seesaw():
 
 
 class Encoder:
-    def __init__(self, slot, sw_pin, on_rotate, on_press):
+    def __init__(self, slot, sw_pin, on_rotate, on_press, on_long_press=None):
         self.on_rotate = on_rotate
         self.on_press = on_press
+        self.on_long_press = on_long_press
         self._last_pos = 0
         self._sw_down_at = None
+        self._long_fired = False
         self._last_press_at = 0.0
         self._last_rotate_at = 0.0
         self._sw_pin = sw_pin
@@ -66,6 +72,7 @@ class Encoder:
             return
         self._last_pos = self._enc.position
         self._sw_down_at = None
+        self._long_fired = False
 
     def poll(self):
         """Read encoder position + button. Call from main loop."""
@@ -92,16 +99,32 @@ class Encoder:
             pressed = not self._sw.value
             if pressed and self._sw_down_at is None:
                 self._sw_down_at = now
+                self._long_fired = False
             elif pressed and self._sw_down_at is not None:
+                # long-press fires once while still held
+                if (
+                    not self._long_fired
+                    and self.on_long_press is not None
+                    and (now - self._sw_down_at) >= LONG_PRESS_S
+                    and (now - self._last_press_at) >= MIN_BETWEEN_PRESS_S
+                ):
+                    self._long_fired = True
+                    self._last_press_at = now
+                    self.on_long_press()
                 # stuck pressed too long = floating pin (seesaw lost pull-up)
-                if (now - self._sw_down_at) > STUCK_PRESS_S:
+                elif (now - self._sw_down_at) > STUCK_PRESS_S:
                     print(f"[encoder] pin {self._sw_pin} stuck — reapplying pull-up", flush=True)
                     self._sw.direction = Direction.INPUT
                     self._sw.pull = Pull.UP
                     self._sw_down_at = None
+                    self._long_fired = False
             elif not pressed and self._sw_down_at is not None:
                 held = now - self._sw_down_at
+                long_fired = self._long_fired
                 self._sw_down_at = None
+                self._long_fired = False
+                if long_fired:
+                    return  # long-press already handled; don't also short-press
                 if held >= MIN_HOLD_S and (now - self._last_press_at) >= MIN_BETWEEN_PRESS_S:
                     self._last_press_at = now
                     self.on_press()

@@ -17,6 +17,7 @@ DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "168"))
 SIM_HELP = """  Controls
   j/k source  enter load   +/- vol   m mute
   [/] skip    space ▶❚❚    ,/. rooms  a apply
+  1/2/3/4 focus pane (source/vol/skip/rooms) — long-press on Pi
   q or ^C = quit"""
 
 if not SIMULATE:

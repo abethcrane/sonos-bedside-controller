@@ -170,7 +170,7 @@ _rooms_last_detent_at = 0.0
 _skip_last_detent_at = 0.0
 _skip_pending = 0  # signed detent count; coalesced in process_encoder_ui
 _last_list_render_at = 0.0
-_pending_action = None  # select | apply_rooms | play_pause | mute
+_pending_action = None  # select | apply_rooms | play_pause | mute | focus_*
 
 def fetch_sonos_data():
     global hh_id, group_id, ordered, room_presets, room_selected, active_room_preset
@@ -481,6 +481,14 @@ def process_encoder_ui():
     elif action == "mute":
         if now - _vol_last_detent_at >= VOLUME_MUTE_GUARD_S:
             do_toggle_mute()
+    elif action == "focus_music":
+        do_focus_music()
+    elif action == "focus_volume":
+        do_focus_volume()
+    elif action == "focus_skip":
+        do_focus_skip()
+    elif action == "focus_rooms":
+        do_focus_rooms()
 
 
 def _queue_action(name):
@@ -505,6 +513,56 @@ def apply_rooms():
         _queue_action("apply_rooms")
         return
     do_apply_rooms()
+
+
+# ── long-press: focus that dial's Sharp pane (no Sonos action) ───────────────
+def focus_music():
+    if USE_ENCODERS:
+        _queue_action("focus_music")
+        return
+    do_focus_music()
+
+
+def focus_volume():
+    if USE_ENCODERS:
+        _queue_action("focus_volume")
+        return
+    do_focus_volume()
+
+
+def focus_skip():
+    if USE_ENCODERS:
+        _queue_action("focus_skip")
+        return
+    do_focus_skip()
+
+
+def focus_rooms():
+    if USE_ENCODERS:
+        _queue_action("focus_rooms")
+        return
+    do_focus_rooms()
+
+
+def do_focus_music():
+    display.sim_log("focus source")
+    _paint_list()
+
+
+def do_focus_volume():
+    display.sim_log("focus volume")
+    _ensure_vol_base()
+    _paint_volume()
+
+
+def do_focus_skip():
+    display.sim_log("focus skip")
+    _refresh_now_playing(direction=0)
+
+
+def do_focus_rooms():
+    display.sim_log("focus rooms")
+    _paint_rooms()
 
 
 def do_select():
@@ -867,6 +925,11 @@ KEYS = {
     "=": lambda: volume(+1),
     "-": lambda: volume(-1),
     "m": toggle_mute,
+    # focus pane (simulates long-press on each dial)
+    "1": focus_music,
+    "2": focus_volume,
+    "3": focus_skip,
+    "4": focus_rooms,
 }
 
 def read_key():
@@ -916,17 +979,22 @@ def main():
 
         if USE_ENCODERS:
             # Left → right: source, volume, skip, rooms
+            # Short press = action; long press (~0.55s) = show that dial's pane only
             enc_music = Encoder(
-                slot=0, sw_pin=12, on_rotate=scroll, on_press=select
+                slot=0, sw_pin=12,
+                on_rotate=scroll, on_press=select, on_long_press=focus_music,
             )
             enc_vol = Encoder(
-                slot=1, sw_pin=14, on_rotate=volume, on_press=toggle_mute
+                slot=1, sw_pin=14,
+                on_rotate=volume, on_press=toggle_mute, on_long_press=focus_volume,
             )
             enc_skip = Encoder(
-                slot=2, sw_pin=17, on_rotate=skip_track, on_press=toggle_play_pause
+                slot=2, sw_pin=17,
+                on_rotate=skip_track, on_press=toggle_play_pause, on_long_press=focus_skip,
             )
             enc_rooms = Encoder(
-                slot=3, sw_pin=9, on_rotate=scroll_rooms, on_press=apply_rooms
+                slot=3, sw_pin=9,
+                on_rotate=scroll_rooms, on_press=apply_rooms, on_long_press=focus_rooms,
             )
             for enc in (enc_music, enc_vol, enc_skip, enc_rooms):
                 enc.reset()

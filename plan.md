@@ -83,22 +83,22 @@ Flask on port **8080**. Prefer mDNS: **`http://sonos-box.local:8080/ui`**. Same 
 
 ---
 
-## Chosen control mapping (four encoders, no long-press)
+## Chosen control mapping (four encoders)
 
-No long-press. Each knob has one job: **turn** + **short press**.
+Each knob: **turn** + **short press**. On the interim Sharp (one pane at a time), **long-press** (~0.55s) only switches to that dial’s screen — no Sonos action. HDMI product UI with soft labels may drop long-press later.
 
-| Knob | Label | Turn | Press |
-|------|-------|------|-------|
-| **Rooms** | `ROOMS` | Scroll room **presets** | Apply highlighted preset |
-| **Music** | `MUSIC` | Scroll favorites / playlists | Load & play selection |
-| **Vol** | `VOL` | Volume up/down (also unmutes if muted) | **Mute / unmute** |
-| **Transport** | `SKIP` | Previous / next track | Play / pause |
+| Knob | Label | Turn | Press | Long-press (Sharp) |
+|------|-------|------|-------|--------------------|
+| **Music** | `MUSIC` | Scroll favorites / playlists | Load & play selection | Show source list |
+| **Vol** | `VOL` | Volume up/down (also unmutes if muted) | **Mute / unmute** | Show volume |
+| **Transport** | `SKIP` | Previous / next track | Play / pause | Show now-playing |
+| **Rooms** | `ROOMS` | Scroll room **presets** | Apply highlighted preset | Show rooms list |
 
-Shuffle / rare actions: later (e.g. double-tap Music) or `/ui` only — not long-press.
+Shuffle / rare actions: later (e.g. double-tap Music) or `/ui` only.
 
 **Implementation notes**
 
-- Debounced short press only; no hold state machine for v1 product UX.
+- Short press on release; long-press fires while held and suppresses the short action.
 - Mute: press Vol → muted; turn Vol or press again → unmute (turn applies Δ from current level after unmute).
 - Transport skip may no-op on radio/line-in; show a brief toast.
 
