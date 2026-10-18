@@ -1,13 +1,15 @@
-# controller/main.py
 """
 Sonos bedside controller main loop.
 
 Encoder architecture (Pi + USE_ENCODERS):
   - seesaw I2C (encoder.py): hardware quadrature decode, polled from main loop.
-  - scroll()/volume(): update selected / volume target under _input_lock, set dirty flags.
-  - process_encoder_ui() (~20ms): redraw Sharp from latest state only.
+  - scroll/rooms/volume/skip: update state under _input_lock, set dirty flags.
+  - process_encoder_ui() (~20ms): redraw Sharp from latest state only (one pane).
   - Sonos volume: local absolute target (instant UI) + rate-limited absolute sets mid-spin.
     Session soft-cap and VOLUME_MAX stop a fast crank from jumping too loud.
+
+Interim slot map (#5752 @ 0x49):
+  0 MUSIC  1 ROOMS  2 VOL  3 SKIP
 
 Keyboard/Mac path calls the same actions but renders immediately (no I2C).
 """
@@ -29,9 +31,12 @@ USE_ENCODERS = ON_PI and os.environ.get("USE_KEYBOARD", "").lower() not in ("1",
 from artist_cache import load_artist_cache
 from sonos import (
     SonosError,
+    apply_room_preset,
     cache_artist_from_playback,
     display_name,
     favorite_unsupported,
+    get_group_volume,
+    get_groups,
     get_household_and_group,
     get_playlists,
     get_favorites,
@@ -40,11 +45,13 @@ from sonos import (
     load_favorite,
     play_pause,
     resolve_favorite_artists,
-    get_volume,
+    set_mute,
     set_volume_absolute,
+    skip_to_next_track,
+    skip_to_previous_track,
 )
 from display import Display, SIM_HELP
-from server import app, should_reload
+from server import app, should_reload, should_apply_rooms
 
 if USE_ENCODERS:
     from encoder import Encoder
@@ -54,9 +61,17 @@ CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return {"items": []}
+        return {"items": [], "room_presets": [], "active_room_preset": None}
     with open(CONFIG_FILE) as f:
-        return json.load(f)
+        data = json.load(f)
+    data.setdefault("items", [])
+    data.setdefault("room_presets", [])
+    data.setdefault("active_room_preset", None)
+    return data
+
+def save_config(config):
+    with open(CONFIG_FILE, "w") as f:
+        json.dump(config, f, indent=2)
 
 def resolve_items(config_items, playlists_by_id, favorites_by_id, cache=None):
     """
@@ -91,12 +106,34 @@ def resolve_items(config_items, playlists_by_id, favorites_by_id, cache=None):
 
     return resolved
 
+def resolve_room_presets(config):
+    """List items for the ROOMS pane: {id, name, rooms, active}."""
+    active = config.get("active_room_preset")
+    out = []
+    for p in config.get("room_presets") or []:
+        pid = p.get("id")
+        label = p.get("label") or pid or "preset"
+        out.append({
+            "id": pid,
+            "name": label,
+            "rooms": list(p.get("rooms") or []),
+            "active": pid == active,
+        })
+    return out
+
 # ── state ─────────────────────────────────────────────────────────────────────
 selected = 0
 ordered  = []
+room_presets = []
+room_selected = 0
+active_room_preset = None
 hh_id    = None
 group_id = None
 display  = Display()
+
+# UI mode: one Sharp pane at a time
+_ui_mode = "music"  # music | rooms | volume
+_muted = False
 
 # Volume: local absolute target (UI) trails onto Sonos with rate limiting.
 _vol_applied = None          # last level we believe Sonos has / last absolute set
@@ -125,7 +162,9 @@ LIST_RENDER_MIN_S = float(os.environ.get("LIST_RENDER_MIN_S", "0.05"))
 LIST_RENDER_IDLE_S = float(os.environ.get("LIST_RENDER_IDLE_S", "0.04"))
 # Ignore list-encoder press while scrolling or briefly after.
 SCROLL_SELECT_GUARD_S = float(os.environ.get("SCROLL_SELECT_GUARD_S", "0.45"))
-VOLUME_PLAY_GUARD_S = float(os.environ.get("VOLUME_PLAY_GUARD_S", "0.45"))
+VOLUME_MUTE_GUARD_S = float(os.environ.get("VOLUME_MUTE_GUARD_S",
+                            os.environ.get("VOLUME_PLAY_GUARD_S", "0.45")))
+SKIP_GUARD_S = float(os.environ.get("SKIP_GUARD_S", "0.45"))
 # Boot: WiFi/Sonos may not be ready the instant systemd starts us.
 STARTUP_RETRY_S = float(os.environ.get("STARTUP_RETRY_S", "10"))
 STARTUP_MAX_RETRIES = int(os.environ.get("STARTUP_MAX_RETRIES", "0"))  # 0 = retry forever
@@ -135,11 +174,14 @@ _input_lock = threading.Lock()
 _list_ui_dirty = False
 _vol_ui_dirty = False
 _scroll_last_detent_at = 0.0
+_rooms_last_detent_at = 0.0
+_skip_last_detent_at = 0.0
+_skip_pending = 0  # signed detent count; coalesced in process_encoder_ui
 _last_list_render_at = 0.0
-_pending_action = None  # "select" | "play_pause" | None — set from GPIO, run on main thread
+_pending_action = None  # select | apply_rooms | play_pause | mute
 
 def fetch_sonos_data():
-    global hh_id, group_id, ordered
+    global hh_id, group_id, ordered, room_presets, room_selected, active_room_preset
     print("Connecting to Sonos...", flush=True)
     print("  households...", flush=True)
     hh_id, group_id = get_household_and_group()
@@ -153,6 +195,9 @@ def fetch_sonos_data():
 
     config = load_config()
     ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id, cache)
+    room_presets = resolve_room_presets(config)
+    active_room_preset = config.get("active_room_preset")
+    room_selected = min(room_selected, max(0, len(room_presets) - 1))
 
     if not ordered:
         print("No items in config.json yet.")
@@ -184,11 +229,39 @@ def _reset_volume_session():
     _vol_pre_base_pct = 0
 
 
+def _set_mode(mode):
+    global _ui_mode
+    _ui_mode = mode
+
+
 def _paint_list():
     if not ordered:
         return
     _reset_volume_session()
-    display.render_list(ordered, selected)
+    _set_mode("music")
+    display.render_list(ordered, selected, header="Music")
+
+
+def _paint_rooms():
+    _reset_volume_session()
+    _set_mode("rooms")
+    if not room_presets:
+        display.render_list(
+            [{"name": "(no presets — use /ui)"}],
+            0,
+            header="Rooms",
+        )
+        return
+    display.render_list(room_presets, room_selected, header="Rooms")
+
+
+def _paint_current():
+    if _ui_mode == "rooms":
+        _paint_rooms()
+    elif _ui_mode == "volume":
+        _paint_volume()
+    else:
+        _paint_list()
 
 
 def _vol_pct_for_delta(delta):
@@ -243,11 +316,12 @@ def _ensure_vol_base():
 
     def fetch():
         global _vol_applied, _vol_target, _vol_session_start
-        global _vol_pre_base_pct, _vol_fetch_inflight, _vol_ui_dirty
+        global _vol_pre_base_pct, _vol_fetch_inflight, _vol_ui_dirty, _muted
         try:
-            level = get_volume(group_id)
+            level, muted = get_group_volume(group_id)
             with _vol_lock:
                 _vol_applied = level
+                _muted = muted
                 if _vol_session_start is None:
                     _vol_session_start = level
                 pending = _vol_pre_base_pct
@@ -270,17 +344,19 @@ def _ensure_vol_base():
 
 
 def _paint_volume():
+    _set_mode("volume")
     current, change, new = _vol_projected()
-    display.render_volume_adjust(current, change, new)
+    display.render_volume_adjust(current, change, new, muted=_muted)
 
 
 def scroll(delta):
-    global selected, _list_ui_dirty, _scroll_last_detent_at
+    global selected, _list_ui_dirty, _scroll_last_detent_at, _ui_mode
     if not ordered:
         return
     if USE_ENCODERS:
         with _input_lock:
             selected = (selected + delta) % len(ordered)
+            _ui_mode = "music"
             _list_ui_dirty = True
         _scroll_last_detent_at = time.monotonic()
         return
@@ -290,41 +366,87 @@ def scroll(delta):
     _paint_list()
 
 
+def scroll_rooms(delta):
+    global room_selected, _list_ui_dirty, _rooms_last_detent_at, _ui_mode
+    if not room_presets:
+        if not USE_ENCODERS:
+            display.sim_log("no room presets — edit /ui")
+            _paint_rooms()
+        else:
+            with _input_lock:
+                _ui_mode = "rooms"
+                _list_ui_dirty = True
+        return
+    if USE_ENCODERS:
+        with _input_lock:
+            room_selected = (room_selected + delta) % len(room_presets)
+            _ui_mode = "rooms"
+            _list_ui_dirty = True
+        _rooms_last_detent_at = time.monotonic()
+        return
+    room_selected = (room_selected + delta) % len(room_presets)
+    arrow = "↑" if delta < 0 else "↓"
+    display.sim_log(f"{arrow} rooms {room_presets[room_selected]['name']}")
+    _paint_rooms()
+
+
 def process_encoder_ui():
     """Main-thread refresh: paint latest state; run queued button actions."""
     global _pending_action, _list_ui_dirty, _vol_ui_dirty, _last_list_render_at
+    global _skip_pending
 
     now = time.monotonic()
     list_dirty = False
     vol_dirty = False
     action = None
+    mode = "music"
+    skip_delta = 0
     with _input_lock:
         list_dirty = _list_ui_dirty
         vol_dirty = _vol_ui_dirty
         _vol_ui_dirty = False
         action = _pending_action
         _pending_action = None
+        mode = _ui_mode
+        skip_delta = _skip_pending
+        _skip_pending = 0
 
-    if list_dirty and ordered:
-        scroll_idle = now - _scroll_last_detent_at >= LIST_RENDER_IDLE_S
+    if list_dirty:
+        last = _scroll_last_detent_at if mode == "music" else _rooms_last_detent_at
+        scroll_idle = now - last >= LIST_RENDER_IDLE_S
         render_due = now - _last_list_render_at >= LIST_RENDER_MIN_S
         if scroll_idle or render_due:
             with _input_lock:
                 _list_ui_dirty = False
-            display.sim_log(f"▶ {ordered[selected]['name']}")
-            _paint_list()
+            if mode == "rooms":
+                if room_presets:
+                    display.sim_log(f"▶ rooms {room_presets[room_selected]['name']}")
+                _paint_rooms()
+            else:
+                if ordered:
+                    display.sim_log(f"▶ {ordered[selected]['name']}")
+                _paint_list()
             _last_list_render_at = now
     elif vol_dirty:
         _paint_volume()
 
     _flush_volume_if_due()
 
+    if skip_delta:
+        do_skip(+1 if skip_delta > 0 else -1)
+
     if action == "select":
         if now - _scroll_last_detent_at >= SCROLL_SELECT_GUARD_S:
             do_select()
+    elif action == "apply_rooms":
+        if now - _rooms_last_detent_at >= SCROLL_SELECT_GUARD_S:
+            do_apply_rooms()
     elif action == "play_pause":
-        if now - _vol_last_detent_at >= VOLUME_PLAY_GUARD_S:
+        if now - _skip_last_detent_at >= SKIP_GUARD_S:
             do_play_pause()
+    elif action == "mute":
+        if now - _vol_last_detent_at >= VOLUME_MUTE_GUARD_S:
+            do_toggle_mute()
 
 
 def _queue_action(name):
@@ -340,6 +462,15 @@ def select():
         _queue_action("select")
         return
     do_select()
+
+
+def apply_rooms():
+    if USE_ENCODERS:
+        if time.monotonic() - _rooms_last_detent_at < SCROLL_SELECT_GUARD_S:
+            return
+        _queue_action("apply_rooms")
+        return
+    do_apply_rooms()
 
 
 def do_select():
@@ -379,9 +510,47 @@ def do_select():
     _paint_list()
 
 
+def do_apply_rooms():
+    global group_id, active_room_preset, room_presets, room_selected
+    if not room_presets:
+        display.sim_log("no room presets")
+        _paint_rooms()
+        return
+    preset = room_presets[room_selected]
+    rooms = preset.get("rooms") or []
+    if not rooms:
+        display.sim_log(f"empty rooms: {preset['name']}")
+        _paint_rooms()
+        return
+    display.sim_log(f"rooms → {preset['name']}")
+    try:
+        new_gid, missing = apply_room_preset(hh_id, rooms, music_context_group_id=group_id)
+        group_id = new_gid
+        active_room_preset = preset["id"]
+        config = load_config()
+        config["active_room_preset"] = active_room_preset
+        save_config(config)
+        room_presets = resolve_room_presets(config)
+        for i, p in enumerate(room_presets):
+            if p["id"] == active_room_preset:
+                room_selected = i
+                break
+        if missing:
+            display.sim_log(f"missing rooms: {', '.join(missing)}")
+            print(f"Room preset missing players: {missing}", flush=True)
+        _reset_volume_session()
+    except SonosError as e:
+        display.sim_log(f"rooms failed: {e.reason}")
+        print(f"Room preset failed ({e.error_code}): {e.reason}", flush=True)
+    except Exception as e:
+        display.sim_log(f"rooms failed: {e}")
+        print(f"Room preset failed: {e}", flush=True)
+    _paint_rooms()
+
+
 def _flush_volume(force_full=False):
     """Move Sonos toward _vol_target (one capped step, or all the way if force_full)."""
-    global _vol_applied, _vol_api_inflight, _vol_last_flush_at, _vol_ui_dirty
+    global _vol_applied, _vol_api_inflight, _vol_last_flush_at, _vol_ui_dirty, _muted
     with _vol_lock:
         target = _vol_target
         applied = _vol_applied
@@ -403,6 +572,7 @@ def _flush_volume(force_full=False):
         set_volume_absolute(group_id, new_level)
         with _vol_lock:
             _vol_applied = new_level
+            _muted = False  # setVolume unmutes
             _vol_last_flush_at = time.monotonic()
             _vol_api_inflight = False
         with _input_lock:
@@ -437,12 +607,21 @@ def _flush_volume_if_due():
 
 def _nudge_volume_target(delta):
     """Update local absolute target from a signed detent count. Returns True if changed."""
-    global _vol_target, _vol_session_start, _vol_pre_base_pct, _vol_last_detent_at
+    global _vol_target, _vol_session_start, _vol_pre_base_pct, _vol_last_detent_at, _muted
     now = time.monotonic()
     pct = _vol_pct_for_delta(delta) * abs(delta)
     if pct == 0:
         return False
     signed = pct if delta > 0 else -pct
+
+    # Turning volume unmutes (plan); clear local flag — setVolume also unmutes.
+    if _muted:
+        _muted = False
+        if group_id is not None:
+            try:
+                set_mute(group_id, False)
+            except Exception as e:
+                print(f"Unmute failed: {e}", flush=True)
 
     _ensure_vol_base()
 
@@ -479,24 +658,30 @@ def _nudge_volume_target(delta):
 
 
 def volume(delta):
-    global _vol_ui_dirty
+    global _vol_ui_dirty, _ui_mode
     changed = _nudge_volume_target(delta)
     if not USE_ENCODERS:
+        _set_mode("volume")
         if changed:
             _paint_volume()
             deadline = time.monotonic() + 1.0
             while _vol_applied is None and time.monotonic() < deadline:
                 time.sleep(0.02)
             _flush_volume(force_full=True)
+        else:
+            _paint_volume()
         return
-    if changed:
-        with _input_lock:
+    with _input_lock:
+        _ui_mode = "volume"
+        if changed:
             _vol_ui_dirty = True
+        else:
+            _vol_ui_dirty = True  # still show pane / unmute
 
 
 def toggle_play_pause():
     if USE_ENCODERS:
-        if time.monotonic() - _vol_last_detent_at < VOLUME_PLAY_GUARD_S:
+        if time.monotonic() - _skip_last_detent_at < SKIP_GUARD_S:
             return
         _queue_action("play_pause")
         return
@@ -505,15 +690,89 @@ def toggle_play_pause():
 
 def do_play_pause():
     display.sim_log("play / pause")
-    play_pause(group_id)
-    _paint_list()
+    try:
+        play_pause(group_id)
+    except Exception as e:
+        display.sim_log(f"play/pause failed: {e}")
+        print(f"play/pause failed: {e}", flush=True)
+    _paint_current()
+
+
+def toggle_mute():
+    if USE_ENCODERS:
+        if time.monotonic() - _vol_last_detent_at < VOLUME_MUTE_GUARD_S:
+            return
+        _queue_action("mute")
+        return
+    do_toggle_mute()
+
+
+def do_toggle_mute():
+    global _muted, _vol_ui_dirty
+    new_muted = not _muted
+    display.sim_log("mute" if new_muted else "unmute")
+    try:
+        set_mute(group_id, new_muted)
+        _muted = new_muted
+    except Exception as e:
+        display.sim_log(f"mute failed: {e}")
+        print(f"Mute failed: {e}", flush=True)
+    _set_mode("volume")
+    if USE_ENCODERS:
+        with _input_lock:
+            _vol_ui_dirty = True
+    else:
+        _paint_volume()
+
+
+def skip_track(delta):
+    """delta < 0 previous, > 0 next. Coalesced on encoder path (one skip per UI tick)."""
+    global _skip_last_detent_at, _skip_pending
+    if delta == 0:
+        return
+    _skip_last_detent_at = time.monotonic()
+    if USE_ENCODERS:
+        with _input_lock:
+            _skip_pending += 1 if delta > 0 else -1
+        return
+    do_skip(delta)
+
+
+def do_skip(delta):
+    label = "next" if delta > 0 else "prev"
+    display.sim_log(f"skip {label}")
+    try:
+        if delta > 0:
+            skip_to_next_track(group_id)
+        else:
+            skip_to_previous_track(group_id)
+    except SonosError as e:
+        display.sim_log(f"skip no-op: {e.reason}")
+        print(f"Skip failed ({e.error_code}): {e.reason}", flush=True)
+    except Exception as e:
+        display.sim_log(f"skip failed: {e}")
+        print(f"Skip failed: {e}", flush=True)
+    _paint_current()
+
+def _refresh_household(keep_group=True):
+    """Refresh hh_id; keep current group_id when it still exists."""
+    global hh_id, group_id
+    new_hh, fallback = get_household_and_group()
+    hh_id = new_hh
+    if not keep_group or group_id is None:
+        group_id = fallback
+        return
+    gids = {g["id"] for g in get_groups(hh_id).get("groups", [])}
+    if group_id not in gids:
+        group_id = fallback
+
 
 # ── config reload (called from Flask /reload endpoint) ───────────────────────
 def do_reload():
-    global ordered, selected, hh_id, group_id
+    global ordered, selected, room_presets, room_selected, active_room_preset
     print("Reloading config from Sonos...", flush=True)
     try:
-        hh_id, group_id = get_household_and_group()
+        _refresh_household(keep_group=True)
         playlists_by_id = {p["id"]: p for p in get_playlists(hh_id)}
         favorites_list = get_favorites(hh_id)
         cache = resolve_favorite_artists(favorites_list)
@@ -521,22 +780,53 @@ def do_reload():
         config = load_config()
         ordered = resolve_items(config["items"], playlists_by_id, favorites_by_id, cache)
         selected = min(selected, max(0, len(ordered) - 1))
+        room_presets = resolve_room_presets(config)
+        active_room_preset = config.get("active_room_preset")
+        room_selected = min(room_selected, max(0, len(room_presets) - 1))
         display.sim_log("config reloaded")
-        _paint_list()
+        _paint_current()
         return playlists_by_id, favorites_by_id
     except Exception as e:
         print(f"Config reload failed: {e}", flush=True)
         display.sim_log(f"reload failed: {e}")
         return None, None
 
+
+def maybe_apply_active_rooms():
+    """Apply active_room_preset from config (UI 'use' or after reload flag)."""
+    global room_selected
+    config = load_config()
+    pid = config.get("active_room_preset")
+    if not pid:
+        return
+    for i, p in enumerate(room_presets):
+        if p["id"] == pid:
+            room_selected = i
+            do_apply_rooms()
+            return
+    # presets list may be stale — reload labels then apply
+    do_reload()
+    for i, p in enumerate(room_presets):
+        if p["id"] == pid:
+            room_selected = i
+            do_apply_rooms()
+            return
+
 # ── keyboard input (Mac simulation) ──────────────────────────────────────────
 KEYS = {
-    "k": lambda: scroll(-1),   # up
-    "j": lambda: scroll(+1),   # down
-    "\r": select,              # enter = select
-    " ": toggle_play_pause,    # space = play/pause
-    "+": lambda: volume(+1),   # volume up
-    "-": lambda: volume(-1),   # volume down
+    "k": lambda: scroll(-1),
+    "j": lambda: scroll(+1),
+    "\r": select,
+    ",": lambda: scroll_rooms(-1),
+    ".": lambda: scroll_rooms(+1),
+    "a": apply_rooms,
+    "[": lambda: skip_track(-1),
+    "]": lambda: skip_track(+1),
+    " ": toggle_play_pause,
+    "+": lambda: volume(+1),
+    "=": lambda: volume(+1),
+    "-": lambda: volume(-1),
+    "m": toggle_mute,
 }
 
 def read_key():
@@ -570,6 +860,13 @@ def main():
     flask_thread.start()
     print("Config server running on http://localhost:8080")
 
+    # Persist: re-apply saved room preset so group matches config after reboot
+    if active_room_preset and room_presets:
+        try:
+            maybe_apply_active_rooms()
+        except Exception as e:
+            print(f"Boot room preset apply failed: {e}", flush=True)
+
     try:
         _paint_list()
 
@@ -577,27 +874,40 @@ def main():
             print(SIM_HELP)
 
         if USE_ENCODERS:
-            enc_list = Encoder(
+            enc_music = Encoder(
                 slot=0, sw_pin=12, on_rotate=scroll, on_press=select
             )
-            enc_vol = Encoder(
-                slot=2, sw_pin=17, on_rotate=volume, on_press=toggle_play_pause
+            enc_rooms = Encoder(
+                slot=1, sw_pin=14, on_rotate=scroll_rooms, on_press=apply_rooms
             )
-            # discard any position accumulated during Sonos startup
-            enc_list.reset()
-            enc_vol.reset()
+            enc_vol = Encoder(
+                slot=2, sw_pin=17, on_rotate=volume, on_press=toggle_mute
+            )
+            enc_skip = Encoder(
+                slot=3, sw_pin=9, on_rotate=skip_track, on_press=toggle_play_pause
+            )
+            for enc in (enc_music, enc_rooms, enc_vol, enc_skip):
+                enc.reset()
 
             while True:
                 if should_reload():
                     playlists_by_id, favorites_by_id = do_reload()
-                enc_list.poll()
+                if should_apply_rooms():
+                    maybe_apply_active_rooms()
+                enc_music.poll()
+                enc_rooms.poll()
                 enc_vol.poll()
+                enc_skip.poll()
                 process_encoder_ui()
                 with _input_lock:
-                    sel = selected
-                    items = ordered
-                if items and display.advance_marquee(sel, items):
-                    _paint_list()
+                    mode = _ui_mode
+                    sel = selected if mode == "music" else room_selected
+                    items = ordered if mode == "music" else room_presets
+                if mode in ("music", "rooms") and items and display.advance_marquee(sel, items):
+                    if mode == "rooms":
+                        _paint_rooms()
+                    else:
+                        _paint_list()
                 time.sleep(UI_LOOP_S)
 
         else:
@@ -605,6 +915,8 @@ def main():
             while True:
                 if should_reload():
                     playlists_by_id, favorites_by_id = do_reload()
+                if should_apply_rooms():
+                    maybe_apply_active_rooms()
                 ch = read_key()
                 # setraw() clears ISIG — Ctrl+C is \x03 bytes, not SIGINT
                 if ch in ("q", "\x03", "\x04"):

@@ -221,6 +221,91 @@ def get_household_and_group():
     group_id = groups[0]["id"]
     return hh_id, group_id
 
+def get_groups(household_id):
+    """Full groups response: {groups, players, …}."""
+    return _get(f"/households/{household_id}/groups")
+
+def get_players(household_id):
+    """Discovered players: [{id, name, …}, …]."""
+    return get_groups(household_id).get("players", [])
+
+def resolve_player_ids(household_id, room_names):
+    """
+    Map room names (or raw player IDs) → player IDs.
+    Returns (player_ids, missing_names).
+    """
+    players = get_players(household_id)
+    by_name = {}
+    by_id = {}
+    for p in players:
+        pid = p.get("id") or ""
+        name = (p.get("name") or "").strip()
+        if pid:
+            by_id[pid] = pid
+        if name:
+            by_name[name.lower()] = pid
+    player_ids = []
+    missing = []
+    seen = set()
+    for raw in room_names:
+        key = (raw or "").strip()
+        if not key:
+            continue
+        pid = by_id.get(key) or by_name.get(key.lower())
+        if not pid:
+            missing.append(key)
+            continue
+        if pid not in seen:
+            seen.add(pid)
+            player_ids.append(pid)
+    return player_ids, missing
+
+def create_group(household_id, player_ids, music_context_group_id=None):
+    """
+    Create (or enlarge) a group from player IDs.
+    Returns new group id. Optionally keeps audio from music_context_group_id.
+    """
+    if not player_ids:
+        raise SonosError(400, "ERROR_INVALID_PARAMETER", "playerIds required")
+    body = {"playerIds": list(player_ids)}
+    if music_context_group_id:
+        body["musicContextGroupId"] = music_context_group_id
+    resp = _post(f"/households/{household_id}/groups/createGroup", body)
+    _check_response(resp)
+    data = resp.json()
+    group = (data.get("group") or data.get("groupInfo", {}).get("group") or {})
+    gid = group.get("id")
+    if not gid:
+        raise SonosError(502, "ERROR_UNKNOWN", f"createGroup missing group id: {data}")
+    return gid
+
+def modify_group_members(group_id, player_ids_to_add=None, player_ids_to_remove=None):
+    body = {}
+    if player_ids_to_add:
+        body["playerIdsToAdd"] = list(player_ids_to_add)
+    if player_ids_to_remove:
+        body["playerIdsToRemove"] = list(player_ids_to_remove)
+    resp = _post(f"/groups/{group_id}/groups/modifyGroupMembers", body)
+    _check_response(resp)
+    data = resp.json()
+    group = (data.get("group") or data.get("groupInfo", {}).get("group") or {})
+    return group.get("id") or group_id
+
+def apply_room_preset(household_id, room_names, music_context_group_id=None):
+    """
+    Resolve room names → createGroup.
+    Returns (group_id, missing_room_names).
+    """
+    player_ids, missing = resolve_player_ids(household_id, room_names)
+    if not player_ids:
+        raise SonosError(
+            400,
+            "ERROR_INVALID_PARAMETER",
+            f"No matching players for rooms: {room_names}",
+        )
+    gid = create_group(household_id, player_ids, music_context_group_id)
+    return gid, missing
+
 def get_playlists(household_id):
     return _get(f"/households/{household_id}/playlists")["playlists"]
 
@@ -232,14 +317,33 @@ def load_playlist(group_id, playlist_id):
 def play_pause(group_id):
     _post(f"/groups/{group_id}/playback/togglePlayPause")
 
+def skip_to_next_track(group_id):
+    resp = _post(f"/groups/{group_id}/playback/skipToNextTrack")
+    _check_response(resp)
+
+def skip_to_previous_track(group_id):
+    resp = _post(f"/groups/{group_id}/playback/skipToPreviousTrack")
+    _check_response(resp)
+
+def get_group_volume(group_id):
+    """(volume 0–100, muted bool) from groupVolume."""
+    data = _get(f"/groups/{group_id}/groupVolume")
+    return int(data.get("volume", 0)), bool(data.get("muted", False))
+
 def get_volume(group_id):
     """Current group volume 0–100."""
-    return _get(f"/groups/{group_id}/groupVolume")["volume"]
+    volume, _muted = get_group_volume(group_id)
+    return volume
 
 def set_volume_absolute(group_id, volume):
-    """Set group volume to an absolute level 0–100."""
+    """Set group volume to an absolute level 0–100 (also unmutes per Sonos API)."""
     level = max(0, min(100, int(volume)))
     _post(f"/groups/{group_id}/groupVolume", {"volume": level})
+
+def set_mute(group_id, muted):
+    """Mute / unmute the group without changing volume level."""
+    resp = _post(f"/groups/{group_id}/groupVolume/mute", {"muted": bool(muted)})
+    _check_response(resp)
 
 def set_volume(group_id, delta_steps):
     """delta_steps: signed detent count → relative % (legacy / tests)."""

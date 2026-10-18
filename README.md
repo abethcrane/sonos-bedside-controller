@@ -50,7 +50,7 @@ cd controller
 python main.py
 ```
 
-Keyboard: `j`/`k` scroll, Enter select, Space play/pause, `+`/`-` volume. Config UI: http://localhost:8080/ui
+Keyboard: `j`/`k` music, Enter load, `,`/`.` rooms, `a` apply preset, `[`/`]` skip, Space play/pause, `+`/`-` volume, `m` mute. Config UI: http://localhost:8080/ui
 
 ---
 
@@ -221,11 +221,16 @@ sudo systemctl restart sonos
 
 ---
 
-## Configuring playlists / favorites
+## Configuring playlists / favorites / room presets
 
 Edit `controller/config.json` by hand, or use the web UI at **http://sonos-box.local:8080/ui** on your LAN. After saving changes in the UI, the running app picks them up via `/reload`.
 
-The UI supports drag-to-reorder, ▶ preview on Sonos, and ✎ custom labels (shown on the physical display instead of the Sonos name).
+The UI supports drag-to-reorder, ▶ preview on Sonos, ✎ custom labels, and **room presets** (named room lists). `active_room_preset` is persisted; the ROOMS knob scrolls presets and press applies them (`createGroup`).
+
+```bash
+curl -s http://sonos-box.local:8080/rooms | jq
+curl -s http://sonos-box.local:8080/room_presets | jq
+```
 
 ### Spotify “Top Tracks” and artist names
 
@@ -252,9 +257,9 @@ Encoder wiring is in [`plan.md`](plan.md).
 
 ### Rotary encoders — Adafruit I2C breakout + Bourns PEC11R
 
-**Parts:** [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752) with Bourns PEC11R-4215F-S0024 encoders soldered into positions #0 and #1. The seesaw chip handles quadrature decoding and debounce in hardware — Pi reads encoder position and button state over I2C.
+**Parts:** [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752) with Bourns PEC11R-4215F-S0024 encoders (populate all four slots). The seesaw chip handles quadrature decoding and debounce in hardware — Pi reads encoder position and button state over I2C.
 
-**4 dupont wires total** for both encoders:
+**4 dupont wires total** for the whole bank:
 
 | Board pad | Pi | Physical pin |
 |-----------|-----|--------------|
@@ -263,7 +268,14 @@ Encoder wiring is in [`plan.md`](plan.md).
 | **D** (SDA) | SDA1 | 3 |
 | **C** (SCL) | SCL1 | 5 |
 
-I2C address: **0x49** (default). Encoder #0 = playlist scroll + select, #1 = volume + play/pause.
+I2C address: **0x49** (default). Interim slot map (seesaw switch pins):
+
+| Slot | Switch pin | Role | Turn | Press |
+|------|------------|------|------|-------|
+| **0** | 12 | **MUSIC** | scroll favorites | load & play |
+| **1** | 14 | **ROOMS** | scroll room presets | apply preset |
+| **2** | 17 | **VOL** | volume | mute / unmute |
+| **3** | 9 | **SKIP** | prev / next track | play / pause |
 
 Requires I2C enabled (`sudo raspi-config` → Interface Options → I2C).
 
@@ -272,7 +284,8 @@ Requires I2C enabled (`sudo raspi-config` → Interface Options → I2C).
 ```bash
 sudo i2cdetect -y 1              # should show 0x49
 cd controller
-python encoder_probe.py          # one line per detent
+python encoder_probe.py          # all 4 slots; one line per detent
+python encoder_probe.py --raw    # position + button state
 ```
 
 ### Encoder + display architecture
@@ -288,14 +301,14 @@ The seesaw chip on the Adafruit breakout counts detents in hardware, so there is
        ▼
   encoder.py (I2C poll)           ← reads position delta + button state
        │
-       ├─ rotate → scroll() / volume()   update selected or volume *target*; set dirty flag
-       └─ press  → queue select / play_pause
+      ├─ rotate → scroll music/rooms / volume / skip
+      └─ press  → queue select / apply / mute / play_pause
        │
        ▼
   main loop every ~20ms: process_encoder_ui()
-       ├─ if list dirty  → render_list(selected)     ← slow SPI; never affects selected
-       ├─ elif vol dirty → render_volume_adjust(...)  ← shows target instantly
-       └─ run queued button action (Sonos HTTP for select / play-pause)
+       ├─ if list dirty  → music or rooms list (one pane)
+       ├─ elif vol dirty → render_volume_adjust(...)  ← shows target + mute
+       └─ run queued button action (Sonos HTTP)
        │
        ▼
   volume Sonos API: absolute set toward target every VOLUME_FLUSH_S,

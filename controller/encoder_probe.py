@@ -6,6 +6,9 @@ Uses the same seesaw I2C reads as encoder.py / main.py.
 
 Decode mode (default): one line per detent.
 Raw mode (--raw): position counter + button state every change.
+
+Seesaw switch pins (product #5752):
+  slot 0 → 12,  slot 1 → 14,  slot 2 → 17,  slot 3 → 9
 """
 
 import argparse
@@ -14,9 +17,12 @@ import signal
 import sys
 import time
 
+# Interim role map (matches main.py). Populate all four Bourns on #5752.
 ENCODERS = [
-    {"name": "playlist (enc 0)", "slot": 0, "sw_pin": 12},
-    {"name": "volume (enc 2)", "slot": 2, "sw_pin": 17},
+    {"name": "MUSIC (enc 0)", "slot": 0, "sw_pin": 12},
+    {"name": "ROOMS (enc 1)", "slot": 1, "sw_pin": 14},
+    {"name": "VOL   (enc 2)", "slot": 2, "sw_pin": 17},
+    {"name": "SKIP  (enc 3)", "slot": 3, "sw_pin": 9},
 ]
 
 

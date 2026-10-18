@@ -15,8 +15,9 @@ DISPLAY_WIDTH = int(os.environ.get("DISPLAY_WIDTH", "144"))
 DISPLAY_HEIGHT = int(os.environ.get("DISPLAY_HEIGHT", "168"))
 
 SIM_HELP = """  Controls
-  j = down   k = up   enter = select   space = play/pause
-  + = vol+   - = vol-   q or ^C = quit"""
+  j/k music   enter load   ,/. rooms   a apply
+  [/] skip    space ▶❚❚    +/- vol     m mute
+  q or ^C = quit"""
 
 if not SIMULATE:
     from PIL import Image, ImageDraw, ImageFont
@@ -151,7 +152,7 @@ class Display:
 
         return False
 
-    def render_list(self, items, selected_index, header="Playlists"):
+    def render_list(self, items, selected_index, header="Music"):
         self._view = "list"
         if items:
             self._reset_marquee(selected_index, items[selected_index]["name"])
@@ -170,7 +171,8 @@ class Display:
             print("  " + "─" * 30)
             for i, item in enumerate(items):
                 prefix = " ▶ " if i == selected_index else "   "
-                print(f"{prefix}{item['name']}")
+                mark = " *" if item.get("active") else ""
+                print(f"{prefix}{item['name']}{mark}")
             return
 
         w, h = DISPLAY_WIDTH, DISPLAY_HEIGHT
@@ -192,6 +194,8 @@ class Display:
             idx = start + i
             y = 18 + i * line_h
             name = item["name"]
+            if item.get("active") and idx != selected_index:
+                name = f"*{name}"
             if idx == selected_index:
                 draw.rectangle([(0, y - 1), (w - 1, y + line_h - 2)], fill=1)
                 offset = int(self._mq_offset) if self._mq_overflow > 0 else 0
@@ -209,13 +213,16 @@ class Display:
 
         show_image(self._disp, img, invert=self._invert)
 
-    def render_volume_adjust(self, current, change, new):
+    def render_volume_adjust(self, current, change, new, muted=False):
         """Live volume feedback while turning the volume encoder."""
         self._view = "volume"
+        header = "MUTED" if muted else "Volume"
         if current is not None and new is not None:
             label = f"now {current}  {change:+d}  →  {new}"
         else:
             label = f"{change:+d}%"
+        if muted:
+            label = f"MUTED  {label}"
         if SIMULATE:
             self.sim_log(f"vol {label}")
             return
@@ -231,10 +238,14 @@ class Display:
         )
         body = self._list_font
 
-        draw.text((TEXT_PAD_LEFT, 2), "Volume", font=header_font, fill=1)
+        draw.text((TEXT_PAD_LEFT, 2), header, font=header_font, fill=1)
         draw.line([(0, 22), (w - 1, 22)], fill=1, width=1)
 
-        if current is not None and new is not None:
+        if muted and current is None and new is None:
+            msg = "muted"
+            mw = _text_width(draw, msg, big_font)
+            draw.text(((w - mw) // 2, 48), msg, font=big_font, fill=1)
+        elif current is not None and new is not None:
             # Big target number centered
             target_str = str(new)
             tw = _text_width(draw, target_str, big_font)
@@ -242,6 +253,8 @@ class Display:
 
             # Change annotation below
             chg_str = f"{change:+d}" if change != 0 else "±0"
+            if muted:
+                chg_str = f"MUTED {chg_str}"
             cw = _text_width(draw, chg_str, body)
             draw.text(((w - cw) // 2, 64), chg_str, font=body, fill=1)
 

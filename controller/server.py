@@ -1,19 +1,57 @@
 # server.py
 from flask import Flask, jsonify, request, abort, render_template_string
-import json, os
+import json, os, re
 
 app = Flask(__name__)
 CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
 
+def _default_config():
+    return {
+        "items": [],
+        "room_presets": [],
+        "active_room_preset": None,
+    }
+
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return {"items": []}
+        return _default_config()
     with open(CONFIG_FILE) as f:
-        return json.load(f)
+        data = json.load(f)
+    data.setdefault("items", [])
+    data.setdefault("room_presets", [])
+    data.setdefault("active_room_preset", None)
+    return data
 
 def save_config(config):
     with open(CONFIG_FILE, "w") as f:
         json.dump(config, f, indent=2)
+
+def _slug_id(label):
+    slug = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
+    return slug or "preset"
+
+def _validate_room_presets(presets):
+    if not isinstance(presets, list):
+        abort(400, "room_presets must be an array")
+    seen = set()
+    cleaned = []
+    for p in presets:
+        if not isinstance(p, dict):
+            abort(400, "Each room preset must be an object")
+        label = (p.get("label") or "").strip()
+        rooms = p.get("rooms")
+        if not isinstance(rooms, list) or not all(isinstance(r, str) for r in rooms):
+            abort(400, "Each preset needs a 'rooms' string array")
+        pid = (p.get("id") or "").strip() or _slug_id(label)
+        if pid in seen:
+            abort(400, f"Duplicate room preset id: {pid}")
+        seen.add(pid)
+        cleaned.append({
+            "id": pid,
+            "label": label or pid,
+            "rooms": [r.strip() for r in rooms if r and r.strip()],
+        })
+    return cleaned
 
 # --- GET current list ---
 @app.route("/items", methods=["GET"])
@@ -31,7 +69,9 @@ def put_items():
             abort(400, "Each item needs 'type' and 'id'")
         if item["type"] not in ("playlist", "favorite"):
             abort(400, f"Unknown type: {item['type']}")
-    save_config({"items": data["items"]})
+    config = load_config()
+    config["items"] = data["items"]
+    save_config(config)
     return jsonify({"ok": True, "count": len(data["items"])})
 
 # --- ADD a single item (append or insert at position) ---
@@ -167,8 +207,9 @@ def play_item():
         return jsonify({"ok": False, "error": str(e)}), 502
     return jsonify({"ok": True})
 
-# --- notify main loop to reload config without restart ---
+# --- notify main loop to reload / apply rooms ---
 _reload_flag = False
+_apply_rooms_flag = False
 
 @app.route("/reload", methods=["POST"])
 def reload_config():
@@ -182,6 +223,76 @@ def should_reload():
         _reload_flag = False
         return True
     return False
+
+def should_apply_rooms():
+    """True once after /active_room_preset (consume flag)."""
+    global _apply_rooms_flag
+    if _apply_rooms_flag:
+        _apply_rooms_flag = False
+        return True
+    return False
+
+# --- discover Sonos rooms/players ---
+@app.route("/rooms", methods=["GET"])
+def get_rooms():
+    from sonos import get_household_and_group, get_players
+    try:
+        hh_id, _ = get_household_and_group()
+        players = [
+            {"id": p.get("id"), "name": p.get("name", "")}
+            for p in get_players(hh_id)
+            if p.get("id")
+        ]
+        players.sort(key=lambda p: (p["name"] or "").lower())
+        return jsonify({"rooms": players})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 502
+
+# --- room presets ---
+@app.route("/room_presets", methods=["GET"])
+def get_room_presets():
+    config = load_config()
+    return jsonify({
+        "room_presets": config.get("room_presets", []),
+        "active_room_preset": config.get("active_room_preset"),
+    })
+
+@app.route("/room_presets", methods=["PUT"])
+def put_room_presets():
+    data = request.get_json(silent=True)
+    if not data or "room_presets" not in data:
+        abort(400, "Expected JSON body with 'room_presets' array")
+    cleaned = _validate_room_presets(data["room_presets"])
+    config = load_config()
+    config["room_presets"] = cleaned
+    active = config.get("active_room_preset")
+    if active and active not in {p["id"] for p in cleaned}:
+        config["active_room_preset"] = None
+    save_config(config)
+    return jsonify({
+        "ok": True,
+        "count": len(cleaned),
+        "room_presets": cleaned,
+        "active_room_preset": config.get("active_room_preset"),
+    })
+
+@app.route("/active_room_preset", methods=["POST"])
+def post_active_room_preset():
+    """Set active preset id and ask the device loop to apply it."""
+    global _reload_flag, _apply_rooms_flag
+    data = request.get_json(silent=True) or {}
+    preset_id = data.get("id")
+    if not preset_id:
+        abort(400, "Expected JSON body with 'id'")
+    config = load_config()
+    ids = {p["id"] for p in config.get("room_presets", [])}
+    if preset_id not in ids:
+        abort(404, f"No room preset with id '{preset_id}'")
+    config["active_room_preset"] = preset_id
+    save_config(config)
+    _reload_flag = True
+    _apply_rooms_flag = True
+    return jsonify({"ok": True, "active_room_preset": preset_id})
 
 
 UI_HTML = """<!DOCTYPE html>
@@ -229,6 +340,17 @@ UI_HTML = """<!DOCTYPE html>
   .status.ok  { color: #1D9E75; }
   .status.err { color: #E24B4A; }
   .empty { font-size: 13px; color: #aaa; padding: 12px 0; text-align: center; }
+  .rooms-panel { max-width: 860px; margin-top: 1.5rem; }
+  .room-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start; margin-bottom: 10px; padding: 10px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.08); background: #fafaf9; }
+  .room-row.active { border-color: #378ADD; background: #E6F1FB; }
+  .room-row input[type=text] { flex: 1; min-width: 120px; font-size: 14px; padding: 6px 8px; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 6px; }
+  .room-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 2; min-width: 180px; }
+  .chip { font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 0.5px solid rgba(0,0,0,0.12); background: #fff; cursor: pointer; user-select: none; }
+  .chip.on { background: #1c1c1a; color: #fff; border-color: #1c1c1a; }
+  .chip.missing { opacity: 0.45; text-decoration: line-through; }
+  .room-actions { display: flex; gap: 4px; align-items: center; }
+  button.secondary { padding: 6px 12px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.15); background: #fff; font-size: 13px; cursor: pointer; }
+  button.secondary:hover { background: #f0f0ef; }
 </style>
 </head>
 <body>
@@ -251,6 +373,17 @@ UI_HTML = """<!DOCTYPE html>
   <button class="primary" onclick="save()">Save to device</button>
   <span class="status" id="status"></span>
 </div>
+
+<div class="panel rooms-panel">
+  <div class="panel-title">Room presets</div>
+  <p class="sub" style="margin-bottom:12px">Named groups of rooms. Device ROOMS knob scrolls these; press applies and persists.</p>
+  <div id="room-presets"></div>
+  <div class="save-bar" style="margin-top:12px">
+    <button class="secondary" onclick="addPreset()">+ preset</button>
+    <button class="primary" onclick="saveRooms()">Save rooms</button>
+    <span class="status" id="rooms-status"></span>
+  </div>
+</div>
  
 <script>
 let activeItems = [];
@@ -258,6 +391,9 @@ let availableItems = [];
 let sonosById = {};
 let dragIdx = null;
 let playingId = null;
+let roomPresets = [];
+let activeRoomPreset = null;
+let discoveredRooms = [];
 
 function mergeSonosMeta(items) {
   return items.map(item => {
@@ -295,9 +431,11 @@ function itemNameHtml(item, idx, editable) {
 }
  
 async function load() {
-  const [configRes, browseRes] = await Promise.all([
+  const [configRes, browseRes, roomsRes, presetsRes] = await Promise.all([
     fetch('/items').then(r => r.json()),
     fetch('/browse').then(r => r.json()),
+    fetch('/rooms').then(r => r.json()).catch(() => ({ rooms: [] })),
+    fetch('/room_presets').then(r => r.json()).catch(() => ({ room_presets: [], active_room_preset: null })),
   ]);
  
   sonosById = {};
@@ -313,9 +451,14 @@ async function load() {
     ...(browseRes.playlists || []),
   ];
   availableItems = allAvailable.filter(i => !activeIds.has(i.id));
+
+  discoveredRooms = roomsRes.rooms || [];
+  roomPresets = presetsRes.room_presets || configRes.room_presets || [];
+  activeRoomPreset = presetsRes.active_room_preset ?? configRes.active_room_preset ?? null;
  
   renderActive();
   renderAvailable();
+  renderRooms();
 }
  
 function renderActive() {
@@ -484,6 +627,120 @@ async function save() {
  
 function escHtml(str) {
   return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function slugId(label) {
+  return (label || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'preset';
+}
+
+function renderRooms() {
+  const el = document.getElementById('room-presets');
+  if (!roomPresets.length) {
+    el.innerHTML = '<div class="empty">No presets yet — add one and pick rooms</div>';
+    return;
+  }
+  const known = new Set(discoveredRooms.map(r => r.name));
+  el.innerHTML = '';
+  roomPresets.forEach((preset, idx) => {
+    const div = document.createElement('div');
+    div.className = 'room-row' + (preset.id === activeRoomPreset ? ' active' : '');
+    const rooms = preset.rooms || [];
+    const chips = discoveredRooms.map(r => {
+      const on = rooms.includes(r.name) ? ' on' : '';
+      return `<span class="chip${on}" onclick="toggleRoom(${idx}, ${JSON.stringify(r.name)})">${escHtml(r.name)}</span>`;
+    }).join('');
+    const orphans = rooms.filter(n => !known.has(n)).map(n =>
+      `<span class="chip on missing" title="not found on Sonos" onclick="toggleRoom(${idx}, ${JSON.stringify(n)})">${escHtml(n)}</span>`
+    ).join('');
+    div.innerHTML = `
+      <input type="text" value="${escHtml(preset.label || '')}" placeholder="Label"
+        onchange="roomPresets[${idx}].label=this.value.trim(); if(!roomPresets[${idx}].id) roomPresets[${idx}].id=slugId(this.value)" />
+      <div class="room-chips">${chips}${orphans || (discoveredRooms.length ? '' : '<span class="empty">No rooms discovered</span>')}</div>
+      <div class="room-actions">
+        <button class="secondary" onclick="activatePreset(${idx})" title="apply on device">${preset.id === activeRoomPreset ? 'active' : 'use'}</button>
+        <button class="icon-btn rm" title="remove" onclick="removePreset(${idx})">×</button>
+      </div>
+    `;
+    el.appendChild(div);
+  });
+}
+
+function toggleRoom(idx, name) {
+  const rooms = roomPresets[idx].rooms || (roomPresets[idx].rooms = []);
+  const i = rooms.indexOf(name);
+  if (i >= 0) rooms.splice(i, 1);
+  else rooms.push(name);
+  renderRooms();
+}
+
+function addPreset() {
+  let n = roomPresets.length + 1;
+  let id = `preset-${n}`;
+  while (roomPresets.some(p => p.id === id)) { n += 1; id = `preset-${n}`; }
+  roomPresets.push({ id, label: `Preset ${n}`, rooms: [] });
+  renderRooms();
+}
+
+function removePreset(idx) {
+  const removed = roomPresets.splice(idx, 1)[0];
+  if (removed && removed.id === activeRoomPreset) activeRoomPreset = null;
+  renderRooms();
+}
+
+async function activatePreset(idx) {
+  const preset = roomPresets[idx];
+  const status = document.getElementById('rooms-status');
+  status.className = 'status';
+  status.textContent = 'Saving & applying…';
+  try {
+    await saveRooms(false);
+    const res = await fetch('/active_room_preset', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: preset.id }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.description || data.error || 'Apply failed');
+    activeRoomPreset = preset.id;
+    renderRooms();
+    status.className = 'status ok';
+    status.textContent = `Active: ${preset.label}`;
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = `Error: ${e.message}`;
+  }
+}
+
+async function saveRooms(showOk = true) {
+  const status = document.getElementById('rooms-status');
+  status.className = 'status';
+  status.textContent = 'Saving rooms…';
+  try {
+    const payload = roomPresets.map(p => ({
+      id: p.id || slugId(p.label),
+      label: (p.label || '').trim() || p.id,
+      rooms: p.rooms || [],
+    }));
+    const res = await fetch('/room_presets', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ room_presets: payload }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.description || 'Unknown error');
+    roomPresets = data.room_presets || payload;
+    if (data.active_room_preset !== undefined) activeRoomPreset = data.active_room_preset;
+    await fetch('/reload', { method: 'POST' });
+    renderRooms();
+    if (showOk) {
+      status.className = 'status ok';
+      status.textContent = `Saved ${data.count} preset${data.count !== 1 ? 's' : ''}`;
+    }
+  } catch (e) {
+    status.className = 'status err';
+    status.textContent = `Error: ${e.message}`;
+    throw e;
+  }
 }
  
 load();

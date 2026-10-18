@@ -60,7 +60,7 @@ Layout: **screen on top, four knobs in a row under it** so on-screen soft labels
 | **D** (SDA) | SDA1 | 3 |
 | **C** (SCL) | SCL1 | 5 |
 
-I2C address: **0x49**. Slot map (target):
+I2C address: **0x49**. Slot map (target product labels left-to-right):
 
 | Slot | Role |
 |------|------|
@@ -69,7 +69,9 @@ I2C address: **0x49**. Slot map (target):
 | **#2** | **VOL** — volume / press mute·unmute |
 | **#3** | **SKIP** (transport) — prev·next / press play·pause |
 
-**Bench test:** `sudo i2cdetect -y 1` → `0x49`, then `python encoder_probe.py` (extend probe for four slots).
+**Interim bench wiring** (keep MUSIC on the populated slot you already use): `#0 MUSIC (sw 12)`, `#1 ROOMS (sw 14)`, `#2 VOL (sw 17)`, `#3 SKIP (sw 9)`. Soft-label order on HDMI can still read ROOMS·MUSIC·VOL·SKIP left-to-right later.
+
+**Bench test:** `sudo i2cdetect -y 1` → `0x49`, then `python encoder_probe.py` (all four slots).
 
 **Display — HDMI** (not SPI Sharp). Power per panel docs (often separate USB 5V). Mini-HDMI from Zero. **GPIO stays free** for backlight PWM + I2C encoders.
 
