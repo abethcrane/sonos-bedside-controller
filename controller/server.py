@@ -346,8 +346,11 @@ UI_HTML = """<!DOCTYPE html>
   .room-row input[type=text] { flex: 1; min-width: 120px; font-size: 14px; padding: 6px 8px; border: 0.5px solid rgba(0,0,0,0.12); border-radius: 6px; }
   .room-chips { display: flex; flex-wrap: wrap; gap: 6px; flex: 2; min-width: 180px; }
   .chip { font-size: 12px; padding: 4px 8px; border-radius: 6px; border: 0.5px solid rgba(0,0,0,0.12); background: #fff; cursor: pointer; user-select: none; }
+  .chip:hover { border-color: #378ADD; }
   .chip.on { background: #1c1c1a; color: #fff; border-color: #1c1c1a; }
+  .chip.on:hover { background: #333; border-color: #333; }
   .chip.missing { opacity: 0.45; text-decoration: line-through; }
+  .chip-hint { font-size: 11px; color: #6b6b67; width: 100%; margin-bottom: 2px; }
   .room-actions { display: flex; gap: 4px; align-items: center; }
   button.secondary { padding: 6px 12px; border-radius: 8px; border: 0.5px solid rgba(0,0,0,0.15); background: #fff; font-size: 13px; cursor: pointer; }
   button.secondary:hover { background: #f0f0ef; }
@@ -633,10 +636,21 @@ function slugId(label) {
   return (label || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'preset';
 }
 
+function makeChip(name, selected, idx, missing) {
+  const span = document.createElement('span');
+  span.className = 'chip' + (selected ? ' on' : '') + (missing ? ' missing' : '');
+  span.textContent = name;
+  span.title = missing
+    ? 'Not found on Sonos — click to remove'
+    : (selected ? 'Selected — click to remove' : 'Click to add to this preset');
+  span.addEventListener('click', () => toggleRoom(idx, name));
+  return span;
+}
+
 function renderRooms() {
   const el = document.getElementById('room-presets');
   if (!roomPresets.length) {
-    el.innerHTML = '<div class="empty">No presets yet — add one and pick rooms</div>';
+    el.innerHTML = '<div class="empty">No presets yet — click “+ preset”, then click room names to toggle them on/off</div>';
     return;
   }
   const known = new Set(discoveredRooms.map(r => r.name));
@@ -645,22 +659,51 @@ function renderRooms() {
     const div = document.createElement('div');
     div.className = 'room-row' + (preset.id === activeRoomPreset ? ' active' : '');
     const rooms = preset.rooms || [];
-    const chips = discoveredRooms.map(r => {
-      const on = rooms.includes(r.name) ? ' on' : '';
-      return `<span class="chip${on}" onclick="toggleRoom(${idx}, ${JSON.stringify(r.name)})">${escHtml(r.name)}</span>`;
-    }).join('');
-    const orphans = rooms.filter(n => !known.has(n)).map(n =>
-      `<span class="chip on missing" title="not found on Sonos" onclick="toggleRoom(${idx}, ${JSON.stringify(n)})">${escHtml(n)}</span>`
-    ).join('');
-    div.innerHTML = `
-      <input type="text" value="${escHtml(preset.label || '')}" placeholder="Label"
-        onchange="roomPresets[${idx}].label=this.value.trim(); if(!roomPresets[${idx}].id) roomPresets[${idx}].id=slugId(this.value)" />
-      <div class="room-chips">${chips}${orphans || (discoveredRooms.length ? '' : '<span class="empty">No rooms discovered</span>')}</div>
-      <div class="room-actions">
-        <button class="secondary" onclick="activatePreset(${idx})" title="apply on device">${preset.id === activeRoomPreset ? 'active' : 'use'}</button>
-        <button class="icon-btn rm" title="remove" onclick="removePreset(${idx})">×</button>
-      </div>
-    `;
+
+    const label = document.createElement('input');
+    label.type = 'text';
+    label.value = preset.label || '';
+    label.placeholder = 'Label';
+    label.addEventListener('change', () => {
+      roomPresets[idx].label = label.value.trim();
+      if (!roomPresets[idx].id) roomPresets[idx].id = slugId(label.value);
+    });
+
+    const chips = document.createElement('div');
+    chips.className = 'room-chips';
+    const hint = document.createElement('div');
+    hint.className = 'chip-hint';
+    hint.textContent = 'Click a room to select / deselect (filled = in this preset)';
+    chips.appendChild(hint);
+    if (!discoveredRooms.length) {
+      const empty = document.createElement('span');
+      empty.className = 'empty';
+      empty.textContent = 'No rooms discovered — is Sonos reachable?';
+      chips.appendChild(empty);
+    } else {
+      for (const r of discoveredRooms) {
+        chips.appendChild(makeChip(r.name, rooms.includes(r.name), idx, false));
+      }
+    }
+    for (const n of rooms.filter(name => !known.has(name))) {
+      chips.appendChild(makeChip(n, true, idx, true));
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'room-actions';
+    const useBtn = document.createElement('button');
+    useBtn.className = 'secondary';
+    useBtn.textContent = preset.id === activeRoomPreset ? 'active' : 'use';
+    useBtn.title = 'apply on device';
+    useBtn.addEventListener('click', () => activatePreset(idx));
+    const rmBtn = document.createElement('button');
+    rmBtn.className = 'icon-btn rm';
+    rmBtn.title = 'remove';
+    rmBtn.textContent = '×';
+    rmBtn.addEventListener('click', () => removePreset(idx));
+    actions.append(useBtn, rmBtn);
+
+    div.append(label, chips, actions);
     el.appendChild(div);
   });
 }
