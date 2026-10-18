@@ -129,9 +129,11 @@ Shuffle / rare actions: later (e.g. double-tap Music) or `/ui` only — not long
 
 ---
 
-## Screen UX: chrome + one active menu
+## Screen UX: chrome + one active menu + idle splash
 
-**Philosophy:** status always visible; **one** interactive list at a time (whichever dial was last turned). No nested settings menus on-device.
+**Philosophy:** while interacting, show chrome + **one** list (last dial touched). After idle, fade to a **now-playing splash** (big album art). No nested settings menus on-device.
+
+### Active UI (any knob recently touched)
 
 **Always-on chrome (header)**
 
@@ -154,9 +156,7 @@ Highlight the label for the **active** dial (last touched). Optional tiny press 
 | Vol | Optional large volume focus (or chrome-only) |
 | Transport | No list — flash prev/next / update track in chrome |
 
-After a few seconds idle on a list dial → collapse middle to chrome-only (calm bedside).
-
-**Rough layout**
+**Rough layout (active)**
 
 ```
 ┌─────────── Downstairs · ▶ · 42% ───────────┐
@@ -172,7 +172,31 @@ After a few seconds idle on a list dial → collapse middle to chrome-only (calm
       (o)       (o)       (o)        (o)
 ```
 
-**4" vs 5":** both fine for chrome + one list + four labels. 5" breathes more; 4" keeps the box tighter. Do **not** show Rooms + Music lists at once unless the panel is large enough that it stays readable (optional later).
+### Idle timeouts (two steps)
+
+| After… | What happens |
+|--------|----------------|
+| **~3–5 s** no knob activity | Collapse middle list → chrome-only (labels still visible) |
+| **~30–60 s** no knob activity (tune; default **45 s**) | Fade to **now-playing splash** |
+
+Any turn or press on any knob → cancel splash, restore active UI (chrome + that dial’s menu if it was a list dial).
+
+### Now-playing splash (idle)
+
+Full-bleed (or near full-bleed) **album art**, UI chrome derived from art colors when we can (palette from cover; fallback dark).
+
+Show on the splash (sparse — not a second control deck):
+
+- Large title + artist  
+- Small room chip (e.g. `Downstairs` / `Kitchen + 1`)  
+- Subtle play/pause + volume or mute glyph (glanceable; knobs still do the work)  
+- Optional thin progress if metadata is cheap; skip if not
+
+Do **not** show soft knob labels or lists on the splash — it’s ambient. First knob touch brings labels back.
+
+Art source: Sonos playback metadata / album art URL (cache locally; placeholder gradient if missing). Night: keep splash but respect low backlight — art shouldn’t blow out the room.
+
+**4" vs 5":** both fine for chrome + one list + four labels; 5" is nicer for splash art. Do **not** show Rooms + Music lists at once unless the panel is large enough that it stays readable (optional later).
 
 ---
 
@@ -202,5 +226,5 @@ Extend `/ui` (and JSON API) the same way as playlists:
 | Vol press | **Mute / unmute**; turn adjusts level (unmutes if needed) |
 | Transport | Turn = prev/next; press = play/pause |
 | Rooms | **Presets** only; scroll + press apply |
-| Screen | HDMI color, good refresh; **chrome always** + **one active menu** + soft labels over knobs |
+| Screen | HDMI color; **chrome + one menu** while active; **~45 s idle → album-art now-playing splash**; any knob wakes UI |
 | Editing lists | **`/ui` on LAN** |
