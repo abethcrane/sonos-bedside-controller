@@ -1,11 +1,12 @@
 # server.py
-from flask import Flask, jsonify, request, abort, render_template_string
+from flask import Flask, jsonify, request, abort, render_template_string, send_from_directory
 import os, re
 
 from config_store import config_path, load_config, save_config
 
 app = Flask(__name__)
 CONFIG_FILE = config_path()  # for logs / debugging
+STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 def _slug_id(label):
     slug = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
@@ -281,11 +282,13 @@ UI_HTML = """<!DOCTYPE html>
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Sonos Beside — config</title>
+<title>sonos-box</title>
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="/favicon.svg">
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f5f5f4; color: #1c1c1a; min-height: 100vh; padding: 2rem 1rem; }
-  h1 { font-size: 18px; font-weight: 500; margin-bottom: 4px; }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 4px; }
   .sub { font-size: 13px; color: #6b6b67; margin-bottom: 2rem; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; max-width: 860px; }
   @media (max-width: 600px) { .cols { grid-template-columns: 1fr; } }
@@ -339,8 +342,8 @@ UI_HTML = """<!DOCTYPE html>
 </head>
 <body>
  
-<h1>Sonos Beside</h1>
-<p class="sub">Drag to reorder · ▶ play on Sonos · ✎ rename · + add · × remove · saves to device config (survives restart + git pull)</p>
+<h1>sonos-box</h1>
+<p class="sub">Playlists &amp; rooms for the bedside knobs · drag to reorder · ▶ preview · saves on device</p>
  
 <div class="cols">
   <div class="panel">
@@ -774,8 +777,16 @@ load();
 
 @app.route("/ui")
 def ui():
-    from flask import render_template_string
     return render_template_string(UI_HTML)
+
+@app.route("/favicon.svg")
+def favicon_svg():
+    return send_from_directory(STATIC_DIR, "favicon.svg", mimetype="image/svg+xml")
+
+@app.route("/favicon.ico")
+def favicon_ico():
+    # Browsers that still ask for .ico — same mark
+    return send_from_directory(STATIC_DIR, "favicon.svg", mimetype="image/svg+xml")
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080, debug=False)
