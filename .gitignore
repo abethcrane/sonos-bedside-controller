@@ -1,6 +1,10 @@
 .env
 controller/tokens.json
 controller/artist_cache.json
+# Device/runtime config — lives on the Pi at ~/.sonos-beside/config.json
+# (Mac uses controller/config.json). Never commit personal playlists/rooms.
+controller/config.json
+controller/config.json.tmp
 
 venv/
 .venv/

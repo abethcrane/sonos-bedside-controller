@@ -223,13 +223,25 @@ sudo systemctl restart sonos
 
 ## Configuring playlists / favorites / room presets
 
-Edit `controller/config.json` by hand, or use the web UI at **http://sonos-box.local:8080/ui** on your LAN. After saving changes in the UI, the running app picks them up via `/reload`.
+Use the web UI at **http://sonos-box.local:8080/ui**. Click **Save to device** / **Save rooms** — that writes a JSON file on the Pi. Restart does **not** wipe it.
 
-The UI supports drag-to-reorder, ▶ preview on Sonos, ✎ custom labels, and **room presets** (named room lists). `active_room_preset` is persisted; the ROOMS knob scrolls presets and press applies them (`createGroup`).
+**Where it’s stored**
+
+| Machine | Path |
+|---------|------|
+| **Pi** | `~/.sonos-beside/config.json` (outside the git repo — `git pull` can’t clobber it) |
+| **Mac** | `controller/config.json` (gitignored) |
+| Override | `SONOS_CONFIG_FILE=/path/to/config.json` |
+
+On first Pi boot after this change, the app migrates an existing `controller/config.json` into `~/.sonos-beside/` if it finds one. Template: `controller/config.example.json`.
+
+The UI supports drag-to-reorder, ▶ preview on Sonos, ✎ custom labels, and **room presets**. `active_room_preset` is persisted; the ROOMS knob scrolls presets and press applies them (`createGroup`).
 
 ```bash
 curl -s http://sonos-box.local:8080/rooms | jq
 curl -s http://sonos-box.local:8080/room_presets | jq
+# on the Pi — your real saved config:
+cat ~/.sonos-beside/config.json
 ```
 
 ### Spotify “Top Tracks” and artist names

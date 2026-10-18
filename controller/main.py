@@ -51,28 +51,14 @@ from sonos import (
     skip_to_next_track,
     skip_to_previous_track,
 )
+from config_store import config_path, load_config, save_config
 from display import Display, SIM_HELP
 from server import app, should_reload, should_apply_rooms
 
 if USE_ENCODERS:
     from encoder import Encoder
 
-# ── config ────────────────────────────────────────────────────────────────────
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
-
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        return {"items": [], "room_presets": [], "active_room_preset": None}
-    with open(CONFIG_FILE) as f:
-        data = json.load(f)
-    data.setdefault("items", [])
-    data.setdefault("room_presets", [])
-    data.setdefault("active_room_preset", None)
-    return data
-
-def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
+CONFIG_FILE = config_path()
 
 def resolve_items(config_items, playlists_by_id, favorites_by_id, cache=None):
     """
@@ -912,6 +898,7 @@ def main():
         daemon=True,
     )
     flask_thread.start()
+    print(f"Config file: {CONFIG_FILE}", flush=True)
     print("Config server running on http://localhost:8080")
 
     # Persist: re-apply saved room preset so group matches config after reboot

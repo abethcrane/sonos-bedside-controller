@@ -1,30 +1,11 @@
 # server.py
 from flask import Flask, jsonify, request, abort, render_template_string
-import json, os, re
+import os, re
+
+from config_store import config_path, load_config, save_config
 
 app = Flask(__name__)
-CONFIG_FILE = os.path.join(os.path.dirname(__file__), "config.json")
-
-def _default_config():
-    return {
-        "items": [],
-        "room_presets": [],
-        "active_room_preset": None,
-    }
-
-def load_config():
-    if not os.path.exists(CONFIG_FILE):
-        return _default_config()
-    with open(CONFIG_FILE) as f:
-        data = json.load(f)
-    data.setdefault("items", [])
-    data.setdefault("room_presets", [])
-    data.setdefault("active_room_preset", None)
-    return data
-
-def save_config(config):
-    with open(CONFIG_FILE, "w") as f:
-        json.dump(config, f, indent=2)
+CONFIG_FILE = config_path()  # for logs / debugging
 
 def _slug_id(label):
     slug = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
@@ -359,7 +340,7 @@ UI_HTML = """<!DOCTYPE html>
 <body>
  
 <h1>Sonos Beside</h1>
-<p class="sub">Drag to reorder · ▶ play on Sonos · ✎ rename · + add · × remove</p>
+<p class="sub">Drag to reorder · ▶ play on Sonos · ✎ rename · + add · × remove · saves to device config (survives restart + git pull)</p>
  
 <div class="cols">
   <div class="panel">
