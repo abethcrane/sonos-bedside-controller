@@ -288,23 +288,24 @@ The seesaw chip on the Adafruit breakout counts detents in hardware, so there is
        ▼
   encoder.py (I2C poll)           ← reads position delta + button state
        │
-       ├─ rotate → scroll() / volume()   update selected or _vol_session_delta; set dirty flag
+       ├─ rotate → scroll() / volume()   update selected or volume *target*; set dirty flag
        └─ press  → queue select / play_pause
        │
        ▼
   main loop every ~20ms: process_encoder_ui()
        ├─ if list dirty  → render_list(selected)     ← slow SPI; never affects selected
-       ├─ elif vol dirty → render_volume_adjust(...)
+       ├─ elif vol dirty → render_volume_adjust(...)  ← shows target instantly
        └─ run queued button action (Sonos HTTP for select / play-pause)
        │
        ▼
-  volume Sonos API: detents logged immediately; API batch after knob pause (VOLUME_SPIN_IDLE_S)
+  volume Sonos API: absolute set toward target every VOLUME_FLUSH_S,
+                    capped by VOLUME_MAX_STEP / VOLUME_SESSION_CAP / VOLUME_MAX
 ```
 
 | Piece | File | Role |
 |-------|------|------|
 | Detent decode | seesaw hardware | On-chip quadrature decode; position counter increments per detent |
-| Input state | `main.py` `scroll()` / `volume()` | `selected` and volume counters updated under `_input_lock` |
+| Input state | `main.py` `scroll()` / `volume()` | `selected` and volume target updated under `_input_lock` |
 | Display | `main.py` `process_encoder_ui()` | Paints **latest** state; may skip frames while spinning fast — selection is still correct |
 | Bench test | `encoder_probe.py` | Same I2C read as production; no display |
 
@@ -317,9 +318,15 @@ Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no I2C).
 LIST_RENDER_MIN_S=0.05 python main.py      # max ~20 playlist paints/sec while spinning
 LIST_RENDER_IDLE_S=0.04 python main.py     # always paint once after you stop
 
-# Volume — Sonos flush waits until knob pauses (see logs: vol detent … then vol Sonos ΔN%)
-VOLUME_SPIN_IDLE_S=0.04 python main.py   # default 0.05 — pause before API batch
-VOLUME_PCT_PER_DETENT=3 python main.py    # default 2 — % per counted detent
+# Volume — local target is instant; Sonos trails with rate limits (won't deafen on a fast crank)
+VOLUME_MAX=70 python main.py              # hard ceiling (default 70)
+VOLUME_SESSION_CAP=12 python main.py      # max +% per continuous spin before idle unlock
+VOLUME_SESSION_IDLE_S=0.35 python main.py # pause to open another +SESSION_CAP window
+VOLUME_FLUSH_S=0.08 python main.py        # how often Sonos is nudged toward target
+VOLUME_MAX_STEP=4 python main.py          # max % change per flush tick
+VOLUME_LEAD_MAX=8 python main.py          # target can't run more than this % ahead of Sonos
+VOLUME_PCT_UP=1 VOLUME_PCT_DOWN=2 python main.py
+# VOLUME_PCT_PER_DETENT=2 still works as a legacy override for both directions
 ```
 
 ### Sharp memory display — Adafruit #3502 (1.3" 144×168)

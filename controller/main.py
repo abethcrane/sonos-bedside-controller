@@ -4,9 +4,10 @@ Sonos bedside controller main loop.
 
 Encoder architecture (Pi + USE_ENCODERS):
   - seesaw I2C (encoder.py): hardware quadrature decode, polled from main loop.
-  - scroll()/volume(): update selected / volume state under _input_lock, set dirty flags.
+  - scroll()/volume(): update selected / volume target under _input_lock, set dirty flags.
   - process_encoder_ui() (~20ms): redraw Sharp from latest state only.
-  - Sonos volume: _vol_pending flushed on the same ~20ms loop as the display (batched API).
+  - Sonos volume: local absolute target (instant UI) + rate-limited absolute sets mid-spin.
+    Session soft-cap and VOLUME_MAX stop a fast crank from jumping too loud.
 
 Keyboard/Mac path calls the same actions but renders immediately (no I2C).
 """
@@ -40,7 +41,7 @@ from sonos import (
     play_pause,
     resolve_favorite_artists,
     get_volume,
-    set_volume,
+    set_volume_absolute,
 )
 from display import Display, SIM_HELP
 from server import app, should_reload
@@ -97,17 +98,27 @@ hh_id    = None
 group_id = None
 display  = Display()
 
-_vol_session_delta = 0  # detents since last volume read or Sonos flush
-_vol_base = None  # Sonos group volume at start of current adjustment burst
-_vol_session_start = None  # volume when user first touched knob (fixed for session)
+# Volume: local absolute target (UI) trails onto Sonos with rate limiting.
+_vol_applied = None          # last level we believe Sonos has / last absolute set
+_vol_target = None           # where the knob wants to go (instant on screen)
+_vol_session_start = None    # level at start of current spin burst (soft-cap anchor)
+_vol_pre_base_pct = 0        # % nudge accumulated before get_volume returns
 _vol_fetch_inflight = False
-_vol_pending = 0
 _vol_lock = threading.Lock()
 _vol_last_detent_at = 0.0
+_vol_last_flush_at = 0.0
 _vol_api_inflight = False
-# Wait this long after the last detent before sending batched steps to Sonos.
-VOLUME_SPIN_IDLE_S = float(os.environ.get("VOLUME_SPIN_IDLE_S", "0.05"))
-VOLUME_PCT_PER_DETENT = int(os.environ.get("VOLUME_PCT_PER_DETENT", "2"))
+# Legacy single knob; UP/DOWN override when set.
+_vol_pct_legacy = os.environ.get("VOLUME_PCT_PER_DETENT")
+VOLUME_PCT_UP = int(os.environ.get("VOLUME_PCT_UP", _vol_pct_legacy or "1"))
+VOLUME_PCT_DOWN = int(os.environ.get("VOLUME_PCT_DOWN", _vol_pct_legacy or "2"))
+VOLUME_MAX = int(os.environ.get("VOLUME_MAX", "70"))
+VOLUME_SESSION_CAP = int(os.environ.get("VOLUME_SESSION_CAP", "12"))
+VOLUME_SESSION_IDLE_S = float(os.environ.get("VOLUME_SESSION_IDLE_S", "0.35"))
+VOLUME_FLUSH_S = float(os.environ.get("VOLUME_FLUSH_S", "0.08"))
+VOLUME_MAX_STEP = int(os.environ.get("VOLUME_MAX_STEP", "4"))
+# Target may only lead applied by this much — knob sticks until Sonos catches up.
+VOLUME_LEAD_MAX = int(os.environ.get("VOLUME_LEAD_MAX", "8"))
 UI_LOOP_S = float(os.environ.get("UI_LOOP_S", "0.02"))
 # Cap Sharp playlist redraws — SPI in the main thread was starving pigpio callbacks.
 LIST_RENDER_MIN_S = float(os.environ.get("LIST_RENDER_MIN_S", "0.05"))
@@ -166,10 +177,11 @@ def fetch_sonos_data_with_retry():
 
 # ── actions ───────────────────────────────────────────────────────────────────
 def _reset_volume_session():
-    global _vol_base, _vol_session_delta, _vol_session_start
-    _vol_base = None
-    _vol_session_delta = 0
+    global _vol_applied, _vol_target, _vol_session_start, _vol_pre_base_pct
+    _vol_applied = None
+    _vol_target = None
     _vol_session_start = None
+    _vol_pre_base_pct = 0
 
 
 def _paint_list():
@@ -179,38 +191,79 @@ def _paint_list():
     display.render_list(ordered, selected)
 
 
-def _vol_change_pct():
-    return _vol_session_delta * VOLUME_PCT_PER_DETENT
+def _vol_pct_for_delta(delta):
+    if delta > 0:
+        return VOLUME_PCT_UP
+    if delta < 0:
+        return VOLUME_PCT_DOWN
+    return 0
+
+
+def _vol_hi_cap(applied=None, target=None):
+    """Hard ceiling. Grandfather an already-over-max level; once below MAX, stay ≤ MAX."""
+    hi = VOLUME_MAX
+    t = target if target is not None else _vol_target
+    a = applied if applied is not None else _vol_applied
+    base = t if t is not None else a
+    if base is not None and base > VOLUME_MAX:
+        hi = base
+    return hi
+
+
+def _clamp_target(raw, session_start=None, applied=None, target=None):
+    """Apply hard max, session soft-cap (up), and lead limit vs applied."""
+    start = session_start if session_start is not None else _vol_session_start
+    a = applied if applied is not None else _vol_applied
+    hi = _vol_hi_cap(a, target)
+    level = max(0, min(hi, int(raw)))
+    if start is not None:
+        level = min(level, start + VOLUME_SESSION_CAP)
+        level = max(0, level)
+    # Don't let the on-screen target race the speaker.
+    if a is not None and VOLUME_LEAD_MAX >= 0:
+        level = max(a - VOLUME_LEAD_MAX, min(a + VOLUME_LEAD_MAX, level))
+    return level
 
 
 def _vol_projected():
-    change = _vol_change_pct()
-    if _vol_base is None:
-        return None, change, None
-    new = max(0, min(100, _vol_base + change))
-    start = _vol_session_start if _vol_session_start is not None else _vol_base
-    total_change = new - start
-    return start, total_change, new
+    """(session_start, change_from_start, target) for the volume screen."""
+    if _vol_target is None:
+        return None, _vol_pre_base_pct, None
+    start = _vol_session_start if _vol_session_start is not None else _vol_applied
+    if start is None:
+        return None, _vol_pre_base_pct, None
+    return start, _vol_target - start, _vol_target
 
 
 def _ensure_vol_base():
     """Fetch Sonos volume once per volume session (first knob detent)."""
     global _vol_fetch_inflight
-    if _vol_base is not None or _vol_fetch_inflight or group_id is None:
+    if _vol_applied is not None or _vol_fetch_inflight or group_id is None:
         return
 
     def fetch():
-        global _vol_base, _vol_fetch_inflight, _vol_ui_dirty, _vol_session_start
+        global _vol_applied, _vol_target, _vol_session_start
+        global _vol_pre_base_pct, _vol_fetch_inflight, _vol_ui_dirty
         try:
-            _vol_base = get_volume(group_id)
-            if _vol_session_start is None:
-                _vol_session_start = _vol_base
+            level = get_volume(group_id)
+            with _vol_lock:
+                _vol_applied = level
+                if _vol_session_start is None:
+                    _vol_session_start = level
+                pending = _vol_pre_base_pct
+                _vol_pre_base_pct = 0
+                if _vol_target is None:
+                    _vol_target = _clamp_target(level + pending, _vol_session_start, level)
+                else:
+                    _vol_target = _clamp_target(_vol_target + pending, _vol_session_start, level)
         except Exception as e:
             print(f"Volume read failed: {e}", flush=True)
         finally:
             _vol_fetch_inflight = False
             with _input_lock:
                 _vol_ui_dirty = True
+            # Knobs may have moved before the read returned — start catching up.
+            _flush_volume_if_due()
 
     _vol_fetch_inflight = True
     threading.Thread(target=fetch, daemon=True).start()
@@ -290,13 +343,13 @@ def select():
 
 
 def do_select():
-    # Apply any volume detents still waiting for spin-idle flush.
+    # Finish any in-flight volume set, then snap Sonos to the current target.
     while True:
         with _vol_lock:
             if not _vol_api_inflight:
                 break
         time.sleep(0.01)
-    _flush_volume()
+    _flush_volume(force_full=True)
     if not ordered:
         return
     item = ordered[selected]
@@ -326,78 +379,119 @@ def do_select():
     _paint_list()
 
 
-def _flush_volume():
-    """Send accumulated detents to Sonos (background thread or before select)."""
-    global _vol_pending, _vol_api_inflight, _vol_base, _vol_session_delta, _vol_ui_dirty
+def _flush_volume(force_full=False):
+    """Move Sonos toward _vol_target (one capped step, or all the way if force_full)."""
+    global _vol_applied, _vol_api_inflight, _vol_last_flush_at, _vol_ui_dirty
     with _vol_lock:
-        batch = _vol_pending
-        _vol_pending = 0
-        _vol_api_inflight = False
-    if batch == 0:
-        return
-    pct = batch * VOLUME_PCT_PER_DETENT
-    if _vol_base is not None:
-        msg = f"vol Sonos {max(0, min(100, _vol_base + pct))} ({pct:+d}%)"
-    else:
-        msg = f"vol Sonos Δ{pct:+d}% ({abs(batch)} detent{'s' if abs(batch) != 1 else ''})"
+        target = _vol_target
+        applied = _vol_applied
+        if target is None or applied is None or target == applied:
+            _vol_api_inflight = False
+            return
+        if force_full:
+            new_level = target
+        else:
+            diff = target - applied
+            step = max(-VOLUME_MAX_STEP, min(VOLUME_MAX_STEP, diff))
+            new_level = applied + step
+        _vol_api_inflight = True
+
+    msg = f"vol Sonos {new_level} (→ target {_vol_target})"
     display.sim_log(msg)
     print(f"  {msg}", flush=True)
     try:
-        set_volume(group_id, batch)
-        if _vol_base is not None:
-            _vol_base = max(0, min(100, _vol_base + pct))
-        _vol_session_delta = 0
+        set_volume_absolute(group_id, new_level)
+        with _vol_lock:
+            _vol_applied = new_level
+            _vol_last_flush_at = time.monotonic()
+            _vol_api_inflight = False
         with _input_lock:
             _vol_ui_dirty = True
     except Exception as e:
+        with _vol_lock:
+            _vol_api_inflight = False
         print(f"Volume failed: {e}", flush=True)
 
 
 def _flush_volume_async():
-    global _vol_api_inflight
-    with _vol_lock:
-        if _vol_pending == 0:
-            _vol_api_inflight = False
-            return
-    _flush_volume()
+    _flush_volume(force_full=False)
 
 
 def _flush_volume_if_due():
-    """After knob pauses, send full pending batch (not one detent mid-spin)."""
+    """Rate-limited mid-spin apply — ear feedback before the crank goes too far."""
     global _vol_api_inflight
     now = time.monotonic()
     with _vol_lock:
-        pending = _vol_pending
-        if pending == 0 or _vol_api_inflight:
+        if (
+            _vol_target is None
+            or _vol_applied is None
+            or _vol_target == _vol_applied
+            or _vol_api_inflight
+        ):
             return
-    if now - _vol_last_detent_at < VOLUME_SPIN_IDLE_S:
-        return
-    with _vol_lock:
+        if now - _vol_last_flush_at < VOLUME_FLUSH_S:
+            return
         _vol_api_inflight = True
     threading.Thread(target=_flush_volume_async, daemon=True).start()
 
 
-def volume(delta):
-    global _vol_session_delta, _vol_ui_dirty, _vol_pending, _vol_last_detent_at, _vol_base
+def _nudge_volume_target(delta):
+    """Update local absolute target from a signed detent count. Returns True if changed."""
+    global _vol_target, _vol_session_start, _vol_pre_base_pct, _vol_last_detent_at
+    now = time.monotonic()
+    pct = _vol_pct_for_delta(delta) * abs(delta)
+    if pct == 0:
+        return False
+    signed = pct if delta > 0 else -pct
+
     _ensure_vol_base()
-    if not USE_ENCODERS:
-        _vol_session_delta += delta
-        _paint_volume()
-        try:
-            set_volume(group_id, delta)
-            pct = delta * VOLUME_PCT_PER_DETENT
-            if _vol_base is not None:
-                _vol_base = max(0, min(100, _vol_base + pct))
-                _vol_session_delta = 0
-        except Exception as e:
-            print(f"Volume failed: {e}", flush=True)
-        return
-    with _input_lock:
-        _vol_session_delta += delta
-        _vol_ui_dirty = True
+
     with _vol_lock:
-        _vol_pending += delta
-    _vol_last_detent_at = time.monotonic()
+        # Idle long enough → open a new soft-cap window from current target.
+        if (
+            _vol_target is not None
+            and _vol_last_detent_at > 0
+            and (now - _vol_last_detent_at) >= VOLUME_SESSION_IDLE_S
+        ):
+            _vol_session_start = _vol_target
+
+        _vol_last_detent_at = now
+
+        if _vol_applied is None:
+            # Same lead idea before the first Sonos read lands.
+            prev = _vol_pre_base_pct
+            _vol_pre_base_pct = max(
+                -VOLUME_LEAD_MAX,
+                min(VOLUME_LEAD_MAX, _vol_pre_base_pct + signed),
+            )
+            return _vol_pre_base_pct != prev
+
+        if _vol_target is None:
+            _vol_target = _vol_applied
+        if _vol_session_start is None:
+            _vol_session_start = _vol_applied
+
+        new_target = _clamp_target(_vol_target + signed)
+        if new_target == _vol_target:
+            return False
+        _vol_target = new_target
+        return True
+
+
+def volume(delta):
+    global _vol_ui_dirty
+    changed = _nudge_volume_target(delta)
+    if not USE_ENCODERS:
+        if changed:
+            _paint_volume()
+            deadline = time.monotonic() + 1.0
+            while _vol_applied is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            _flush_volume(force_full=True)
+        return
+    if changed:
+        with _input_lock:
+            _vol_ui_dirty = True
 
 
 def toggle_play_pause():

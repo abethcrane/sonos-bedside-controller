@@ -236,8 +236,13 @@ def get_volume(group_id):
     """Current group volume 0–100."""
     return _get(f"/groups/{group_id}/groupVolume")["volume"]
 
+def set_volume_absolute(group_id, volume):
+    """Set group volume to an absolute level 0–100."""
+    level = max(0, min(100, int(volume)))
+    _post(f"/groups/{group_id}/groupVolume", {"volume": level})
+
 def set_volume(group_id, delta_steps):
-    """delta_steps: signed detent count (batched)."""
+    """delta_steps: signed detent count → relative % (legacy / tests)."""
     pct = int(os.environ.get("VOLUME_PCT_PER_DETENT", "2"))
     _post(f"/groups/{group_id}/groupVolume/relative",
           {"volumeDelta": delta_steps * pct})
