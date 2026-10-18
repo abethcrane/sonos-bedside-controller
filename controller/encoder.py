@@ -24,6 +24,7 @@ if not SIMULATE:
 SEESAW_ADDR = int(os.environ.get("SEESAW_ADDR", "0x49"), 0)
 MIN_HOLD_S = float(os.environ.get("ENCODER_MIN_HOLD_S", "0.05"))
 MIN_BETWEEN_PRESS_S = float(os.environ.get("ENCODER_MIN_BETWEEN_S", "0.30"))
+STUCK_PRESS_S = 5.0  # re-apply pull-up if "pressed" this long (seesaw reset)
 
 _seesaw_instance = None
 
@@ -45,6 +46,7 @@ class Encoder:
         self._sw_down_at = None
         self._last_press_at = 0.0
         self._last_rotate_at = 0.0
+        self._sw_pin = sw_pin
 
         if SIMULATE:
             print(f"[encoder] Simulated — slot={slot}")
@@ -90,6 +92,13 @@ class Encoder:
             pressed = not self._sw.value
             if pressed and self._sw_down_at is None:
                 self._sw_down_at = now
+            elif pressed and self._sw_down_at is not None:
+                # stuck pressed too long = floating pin (seesaw lost pull-up)
+                if (now - self._sw_down_at) > STUCK_PRESS_S:
+                    print(f"[encoder] pin {self._sw_pin} stuck — reapplying pull-up", flush=True)
+                    self._sw.direction = Direction.INPUT
+                    self._sw.pull = Pull.UP
+                    self._sw_down_at = None
             elif not pressed and self._sw_down_at is not None:
                 held = now - self._sw_down_at
                 self._sw_down_at = None
