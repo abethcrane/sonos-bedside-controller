@@ -63,3 +63,35 @@ def get_artists(artist_ids):
             if artist and artist.get("id") and artist.get("name"):
                 out[artist["id"]] = artist["name"]
     return out
+
+
+def get_album_artists(album_ids):
+    """Return {spotifyAlbumId: 'Artist' or 'A, B'} for up to 20 ids per call."""
+    if not album_ids:
+        return {}
+    token = _client_credentials()
+    if not token:
+        return {}
+
+    out = {}
+    for i in range(0, len(album_ids), 20):
+        batch = album_ids[i : i + 20]
+        resp = requests.get(
+            "https://api.spotify.com/v1/albums",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"ids": ",".join(batch)},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            continue
+        for album in resp.json().get("albums") or []:
+            if not album or not album.get("id"):
+                continue
+            names = [
+                a.get("name")
+                for a in (album.get("artists") or [])
+                if a and a.get("name")
+            ]
+            if names:
+                out[album["id"]] = ", ".join(names)
+    return out

@@ -6,10 +6,11 @@ CACHE_FILE = os.path.join(os.path.dirname(__file__), "artist_cache.json")
 
 def load_artist_cache():
     if not os.path.exists(CACHE_FILE):
-        return {"bySpotifyArtistId": {}, "byFavoriteId": {}}
+        return {"bySpotifyArtistId": {}, "bySpotifyAlbumId": {}, "byFavoriteId": {}}
     with open(CACHE_FILE) as f:
         data = json.load(f)
     data.setdefault("bySpotifyArtistId", {})
+    data.setdefault("bySpotifyAlbumId", {})
     data.setdefault("byFavoriteId", {})
     return data
 

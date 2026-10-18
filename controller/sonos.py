@@ -25,19 +25,44 @@ _GENERIC_FAVORITE_NAMES = frozenset({
     "mix", "mixes", "on tour", "discover",
 })
 
+# Sonos often puts the *service* in `description` for albums/playlists — not the artist.
+_SERVICE_DESCRIPTIONS = frozenset({
+    "spotify",
+    "spotify playlist",
+    "spotify album",
+    "apple music",
+    "amazon music",
+    "amazon music unlimited",
+    "tidal",
+    "deezer",
+    "pandora",
+    "youtube music",
+    "soundcloud",
+    "tunein",
+    "pocket casts",
+})
+
 def is_useless_description(desc):
     d = (desc or "").strip().lower()
     if not d or d == "from music library":
+        return True
+    if d in _SERVICE_DESCRIPTIONS:
+        return True
+    if d.startswith("spotify ") or d.startswith("apple music"):
         return True
     if d.endswith(" playlist"):
         return True
     return False
 
-def spotify_artist_id_from_item(item):
+def _spotify_object_id(item):
     resource = item.get("resource") or {}
     obj_id = (resource.get("id") or {}).get("objectId") or ""
     if "spotify:" in obj_id:
-        obj_id = obj_id[obj_id.index("spotify:"):]
+        return obj_id[obj_id.index("spotify:"):]
+    return obj_id
+
+def spotify_artist_id_from_item(item):
+    obj_id = _spotify_object_id(item)
     match = re.search(
         r"spotify:artistTopTracks:([A-Za-z0-9]+)|spotify:artist:([A-Za-z0-9]+)",
         obj_id,
@@ -45,6 +70,11 @@ def spotify_artist_id_from_item(item):
     if not match:
         return None
     return match.group(1) or match.group(2)
+
+def spotify_album_id_from_item(item):
+    obj_id = _spotify_object_id(item)
+    match = re.search(r"spotify:album:([A-Za-z0-9]+)", obj_id)
+    return match.group(1) if match else None
 
 def is_generic_favorite_name(name):
     n = (name or "").lower().strip()
@@ -81,30 +111,52 @@ def item_artist_name(item, cache=None):
         if cached:
             return cached
 
+    album_id = spotify_album_id_from_item(item)
+    if album_id:
+        cached = cache.get("bySpotifyAlbumId", {}).get(album_id)
+        if cached:
+            return cached
+
     desc = (item.get("description") or "").strip()
     if desc and not is_useless_description(desc):
         return desc
     return None
 
 def resolve_favorite_artists(favorites, cache=None):
-    """Fill cache from Spotify IDs embedded in Sonos favorites."""
-    from spotify import get_artists, spotify_configured
+    """Fill cache from Spotify artist/album IDs embedded in Sonos favorites."""
+    from spotify import get_album_artists, get_artists, spotify_configured
 
     cache = cache if cache is not None else load_artist_cache()
     by_spotify = cache.setdefault("bySpotifyArtistId", {})
+    by_album = cache.setdefault("bySpotifyAlbumId", {})
     by_fav = cache.setdefault("byFavoriteId", {})
-    missing = set()
+    missing_artists = set()
+    missing_albums = set()
 
     for fav in favorites:
         fav_id = str(fav.get("id", ""))
         if fav_id and fav_id in by_fav:
             continue
-        spotify_id = spotify_artist_id_from_item(fav)
-        if spotify_id and spotify_id not in by_spotify:
-            missing.add(spotify_id)
+        artist_id = spotify_artist_id_from_item(fav)
+        if artist_id and artist_id not in by_spotify:
+            missing_artists.add(artist_id)
+        album_id = spotify_album_id_from_item(fav)
+        if album_id and album_id not in by_album:
+            missing_albums.add(album_id)
 
-    if missing and spotify_configured():
-        by_spotify.update(get_artists(sorted(missing)))
+    if spotify_configured():
+        if missing_artists:
+            by_spotify.update(get_artists(sorted(missing_artists)))
+        if missing_albums:
+            by_album.update(get_album_artists(sorted(missing_albums)))
+        # Stash onto favorites so display works even if album cache is consulted later
+        for fav in favorites:
+            fav_id = str(fav.get("id", ""))
+            if not fav_id or fav_id in by_fav:
+                continue
+            album_id = spotify_album_id_from_item(fav)
+            if album_id and album_id in by_album:
+                by_fav[fav_id] = by_album[album_id]
         save_artist_cache(cache)
 
     return cache
@@ -130,6 +182,9 @@ def cache_artist_from_playback(group_id, favorite_id, cache=None):
     match = re.search(r"spotify:artistTopTracks:([A-Za-z0-9]+)", container_id)
     if match:
         cache.setdefault("bySpotifyArtistId", {})[match.group(1)] = artist
+    album_match = re.search(r"spotify:album:([A-Za-z0-9]+)", container_id)
+    if album_match:
+        cache.setdefault("bySpotifyAlbumId", {})[album_match.group(1)] = artist
 
     save_artist_cache(cache)
     return cache
