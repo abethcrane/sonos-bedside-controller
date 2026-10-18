@@ -1,14 +1,11 @@
 #!/usr/bin/env python3
 """
-Hardware bring-up for KY-040 rotary encoder modules (PEC11R on PCB).
+Hardware bring-up for Adafruit I2C Quad Rotary Encoder Breakout (#5752).
 
-Uses the same sequence_step() FSM as encoder.py / main.py — good counts here
-but slow SPI in the app mean you must test production behavior separately.
+Uses the same seesaw I2C reads as encoder.py / main.py.
 
-Wiring: CLK, DT, SW, GND to Pi; leave module + unconnected. Do not tie + to GND.
-
-Decode mode (default): one line per detent (~20 per full turn).
-Raw mode (--raw): CLK/DT levels while turning — DT must toggle with CLK.
+Decode mode (default): one line per detent.
+Raw mode (--raw): position counter + button state every change.
 """
 
 import argparse
@@ -17,186 +14,115 @@ import signal
 import sys
 import time
 
-if os.path.exists("/dev/gpiomem"):
-    import pigpio
-
 ENCODERS = [
-    {
-        "name": "playlist (enc 1)",
-        "clk": 17,
-        "dt": 27,
-        "sw": 22,
-        "clk_pin": 11,
-        "dt_pin": 13,
-    },
-    {
-        "name": "volume (enc 2)",
-        "clk": 5,
-        "dt": 26,
-        "sw": 13,
-        "clk_pin": 29,
-        "dt_pin": 37,
-    },
+    {"name": "playlist (enc 0)", "slot": 0, "sw_pin": 12},
+    {"name": "volume (enc 2)", "slot": 2, "sw_pin": 17},
 ]
 
 
-def wiring_banner():
-    print("Rotary encoder probe (KY-040: CLK, DT, SW, GND; leave + unconnected)")
-    print()
-    print("Turn each knob both ways.")
-    print("Decode mode: expect one line per detent (~20 per full turn on KY-040).")
-    print("If only one direction appears, check the grey DT wire for that encoder.")
-    print()
-    for enc in ENCODERS:
-        print(
-            f"  {enc['name']}: CLK white -> GPIO {enc['clk']} (pin {enc['clk_pin']}), "
-            f"DT grey -> GPIO {enc['dt']} (pin {enc['dt_pin']})"
-        )
-    print()
-    print("Requires pigpiod: sudo systemctl start pigpiod")
-    print()
-
-
-from encoder import (
-    GPIO_GLITCH_FILTER_US,
-    sequence_step,
-)
-
-
-class EncoderProbe:
-    def __init__(self, name, pi, clk, dt):
-        self.name = name
-        self.pi = pi
-        self.clk = clk
-        self.dt = dt
-        self.plus = 0
-        self.minus = 0
-        self._seq_state = (0, 0, 0)
-
-        for pin in (clk, dt):
-            pi.set_mode(pin, pigpio.INPUT)
-            pi.set_pull_up_down(pin, pigpio.PUD_UP)
-        pi.set_glitch_filter(clk, GPIO_GLITCH_FILTER_US)
-        pi.set_glitch_filter(dt, GPIO_GLITCH_FILTER_US)
-
-        self._cb_clk = pi.callback(clk, pigpio.EITHER_EDGE, self._on_quad)
-        self._cb_dt = pi.callback(dt, pigpio.EITHER_EDGE, self._on_quad)
-
-    def _read_pin_state(self):
-        clk1, dt1 = self.pi.read(self.clk), self.pi.read(self.dt)
-        clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
-        if clk1 != clk2 or dt1 != dt2:
-            clk2, dt2 = self.pi.read(self.clk), self.pi.read(self.dt)
-        return (clk2 << 1) | dt2
-
-    def _on_quad(self, gpio, level, tick):
-        pin_state = self._read_pin_state()
-        self._seq_state, direction = sequence_step(
-            self._seq_state, pin_state, tick
-        )
-        if not direction:
-            return
-        clk = pin_state >> 1
-        dt = pin_state & 1
-        if direction > 0:
-            self.plus += 1
-        else:
-            self.minus += 1
-        print(
-            f"[{self.name}] dir={direction:+d}  CLK={clk} DT={dt}  "
-            f"(+{self.plus}/-{self.minus})",
-            flush=True,
-        )
-
-    def cancel(self):
-        self._cb_clk.cancel()
-        self._cb_dt.cancel()
-
-    def warn_if_one_way(self):
-        if self.plus and not self.minus:
-            print(f"  !! {self.name}: only +1 — DT may be stuck low")
-        elif self.minus and not self.plus:
-            print(f"  !! {self.name}: only -1 — DT may be stuck high / floating")
-
-
-def run_decode(pi):
-    print("Decode mode — Ctrl+C for summary.")
-    print()
-
-    probes = [
-        EncoderProbe(enc["name"], pi, enc["clk"], enc["dt"]) for enc in ENCODERS
-    ]
-
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print()
-        for probe in probes:
-            print(
-                f"{probe.name}: +{probe.plus}  -{probe.minus}  "
-                f"(total {probe.plus + probe.minus})"
-            )
-            probe.warn_if_one_way()
-        print("Bye.")
-    finally:
-        for probe in probes:
-            probe.cancel()
-
-
-def run_raw(pi):
-    print("Raw pin watch — turn slowly. Both CLK and DT should toggle each encoder.")
-    print("Ctrl+C to stop.")
-    print()
-
-    last = {}
-    for enc in ENCODERS:
-        for pin in (enc["clk"], enc["dt"]):
-            pi.set_mode(pin, pigpio.INPUT)
-            pi.set_pull_up_down(pin, pigpio.PUD_UP)
-        last[enc["name"]] = (pi.read(enc["clk"]), pi.read(enc["dt"]))
-
-    try:
-        while True:
-            for enc in ENCODERS:
-                clk = pi.read(enc["clk"])
-                dt = pi.read(enc["dt"])
-                state = (clk, dt)
-                if last[enc["name"]] != state:
-                    last[enc["name"]] = state
-                    print(f"[{enc['name']}] CLK={clk} DT={dt}", flush=True)
-            time.sleep(0.02)
-    except KeyboardInterrupt:
-        print("\nBye.")
-
-
 def main():
-    parser = argparse.ArgumentParser(description="Rotary encoder wiring probe")
+    parser = argparse.ArgumentParser(description="I2C rotary encoder probe")
     parser.add_argument(
         "--raw",
         action="store_true",
-        help="watch CLK/DT pin levels instead of decoded direction",
+        help="show position counter + button state on every change",
     )
     args = parser.parse_args()
 
-    if not os.path.exists("/dev/gpiomem"):
-        sys.exit("Run on the Pi — not Mac keyboard/sim mode")
+    if not os.path.exists("/dev/i2c-1"):
+        sys.exit("Run on the Pi — /dev/i2c-1 not found")
 
-    pi = pigpio.pi()
-    if not pi.connected:
-        sys.exit("pigpio daemon not running — try: sudo systemctl start pigpiod")
+    from board import SCL, SDA
+    import busio
+    from adafruit_seesaw import seesaw, rotaryio, digitalio
+    from digitalio import Direction, Pull
 
-    wiring_banner()
+    i2c = busio.I2C(SCL, SDA)
+    ss = seesaw.Seesaw(i2c, addr=0x49)
+    print("seesaw connected (addr=0x49)\n")
 
+    probes = []
+    for enc in ENCODERS:
+        e = rotaryio.IncrementalEncoder(ss, enc["slot"])
+        sw = digitalio.DigitalIO(ss, enc["sw_pin"])
+        sw.direction = Direction.INPUT
+        sw.pull = Pull.UP
+        probes.append({
+            "name": enc["name"],
+            "enc": e,
+            "sw": sw,
+            "last_pos": e.position,
+            "last_sw": sw.value,
+            "plus": 0,
+            "minus": 0,
+            "presses": 0,
+        })
+        print(f"  {enc['name']}: slot {enc['slot']}, switch pin {enc['sw_pin']}")
+
+    print()
     signal.signal(signal.SIGTERM, signal.SIG_DFL)
 
-    try:
-        if args.raw:
-            run_raw(pi)
-        else:
-            run_decode(pi)
-    finally:
-        pi.stop()
+    if args.raw:
+        print("Raw mode — position + button on every change. Ctrl+C to stop.\n")
+        t0 = time.monotonic()
+        try:
+            while True:
+                ts = f"{time.monotonic() - t0:8.3f}"
+                for p in probes:
+                    pos = p["enc"].position
+                    if pos != p["last_pos"]:
+                        delta = pos - p["last_pos"]
+                        if delta > 0x7FFFFFFF:
+                            delta -= 0x100000000
+                        elif delta < -0x80000000:
+                            delta += 0x100000000
+                        print(f"  {ts}  [{p['name']}] pos={pos}  delta={delta}")
+                        p["last_pos"] = pos
+                    sw_val = p["sw"].value
+                    if sw_val != p["last_sw"]:
+                        state = "UP" if sw_val else "DOWN"
+                        print(f"  {ts}  [{p['name']}] button {state}")
+                        p["last_sw"] = sw_val
+                time.sleep(0.005)
+        except KeyboardInterrupt:
+            print("\nBye.")
+    else:
+        print("Decode mode — one line per detent. Ctrl+C for summary.\n")
+        try:
+            while True:
+                for p in probes:
+                    pos = p["enc"].position
+                    if pos != p["last_pos"]:
+                        delta = pos - p["last_pos"]
+                        if delta > 0x7FFFFFFF:
+                            delta -= 0x100000000
+                        elif delta < -0x80000000:
+                            delta += 0x100000000
+                        p["last_pos"] = pos
+                        if delta > 0:
+                            p["plus"] += delta
+                        else:
+                            p["minus"] += abs(delta)
+                        print(
+                            f"[{p['name']}] delta={delta:+d}  "
+                            f"(+{p['plus']}/-{p['minus']})",
+                            flush=True,
+                        )
+                    pressed = not p["sw"].value
+                    was_pressed = not p["last_sw"]
+                    if pressed and not was_pressed:
+                        p["presses"] += 1
+                        print(f"[{p['name']}] PRESS ({p['presses']})", flush=True)
+                    p["last_sw"] = p["sw"].value
+                time.sleep(0.005)
+        except KeyboardInterrupt:
+            print()
+            for p in probes:
+                print(
+                    f"{p['name']}: +{p['plus']}  -{p['minus']}  "
+                    f"presses={p['presses']}"
+                )
+            print("Bye.")
 
 
 if __name__ == "__main__":

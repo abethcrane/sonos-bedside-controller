@@ -248,68 +248,48 @@ After changing `.env`, restart the service (`sudo systemctl restart sonos` on th
 
 ## Hardware wiring
 
-Encoder wiring (KY-040 breakouts, `+` left NC) is in [`plan.md`](plan.md). GPIO numbers below are **BCM** — see [pinout.xyz](https://pinout.xyz/) for the physical header map.
+Encoder wiring is in [`plan.md`](plan.md).
 
-**Wire colors (this build):**
+### Rotary encoders — Adafruit I2C breakout + Bourns PEC11R
 
-| Color | Use |
-|-------|-----|
-| White | Encoder CLK |
-| Grey | Encoder DT |
-| Black | Encoder SW |
-| Brown | Encoder 1 ground |
-| Purple | Encoder 2 ground |
-| Blue | Display ground (GND, EMD) |
-| Orange | Power / 3.3V (display VIN, DISP) |
-| Red | Display CLK |
-| Yellow | Display DI |
-| Green | Display CS |
+**Parts:** [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752) with Bourns PEC11R-4215F-S0024 encoders soldered into positions #0 and #1. The seesaw chip handles quadrature decoding and debounce in hardware — Pi reads encoder position and button state over I2C.
 
-### Rotary encoders — KY-040 breakout modules
+**4 dupont wires total** for both encoders:
 
-**Parts:** [KY-040](https://www.amazon.com/dp/B07T3672VK) (or equivalent) — 5-pin header **CLK · DT · SW · + · GND**. Bourns PEC11R sits on the module; the PCB handles the switch and optional onboard pull-ups.
+| Board pad | Pi | Physical pin |
+|-----------|-----|--------------|
+| **VIN** | 5V | 2 |
+| **-** (GND) | GND | 6 |
+| **D** (SDA) | SDA1 | 3 |
+| **C** (SCL) | SCL1 | 5 |
 
-**This build:** **4 duponts per encoder** — CLK, DT, SW, GND. Leave **`+` unconnected** (Pi internal pull-ups in `encoder.py` are enough; avoids needing a third 3.3V header pin when the display uses pins 1 and 17). **Never** tie `+` to GND.
+I2C address: **0x49** (default). Encoder #0 = playlist scroll + select, #1 = volume + play/pause.
 
-Duponts: **female → Pi header**, **male → KY-040 holes**.
-
-| Encoder | KY-040 pin | Wire | Pi | BCM GPIO | Physical pin |
-|---------|------------|------|-----|----------|--------------|
-| 1 — playlist | CLK | White | GPIO | 17 | 11 |
-| 1 — playlist | DT | Grey | GPIO | 27 | 13 |
-| 1 — playlist | SW | Black | GPIO | 22 | 15 |
-| 1 — playlist | GND | Brown | **GND** | — | 6 |
-| 1 — playlist | + | — | **NC** | — | — |
-| 2 — volume | CLK | White | GPIO | 5 | 29 |
-| 2 — volume | DT | Grey | GPIO | 26 | 37 |
-| 2 — volume | SW | Black | GPIO | 13 | 33 |
-| 2 — volume | GND | Purple | **GND** | — | 34 |
-| 2 — volume | + | — | **NC** | — | — |
-
-*(GND physical pins are interchangeable — any Pi GND pin works.)*
-
-Requires `pigpiod` running (`sudo systemctl start pigpiod`).
+Requires I2C enabled (`sudo raspi-config` → Interface Options → I2C).
 
 **Bench test on the Pi:**
 
 ```bash
+sudo i2cdetect -y 1              # should show 0x49
 cd controller
 python encoder_probe.py          # one line per detent
-python encoder_probe.py --raw    # CLK/DT pin levels while turning
 ```
 
 ### Encoder + display architecture
 
-Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a Pi Zero can take 100–500ms; doing that inside a pigpio GPIO callback blocks the next detent and it feels like “one step per revolution.” `encoder_probe.py` only prints text, so it can look fine while `main.py` did not.
+The seesaw chip on the Adafruit breakout counts detents in hardware, so there is no risk of the Pi missing edges during slow SPI redraws. `encoder.py` polls the seesaw over I2C in the main loop.
 
 ```
-  KY-040 detent
+  PEC11R detent
        │
        ▼
-  encoder.py (pigpio callback)     ← fast: quadrature decode, on_rotate(±1), on_press
+  seesaw chip (hardware decode)   ← handles quadrature + debounce on-chip
+       │
+       ▼
+  encoder.py (I2C poll)           ← reads position delta + button state
        │
        ├─ rotate → scroll() / volume()   update selected or _vol_session_delta; set dirty flag
-       └─ press  → queue select / play_pause (not handled in callback)
+       └─ press  → queue select / play_pause
        │
        ▼
   main loop every ~20ms: process_encoder_ui()
@@ -323,31 +303,21 @@ Hardware counting and the UI are **split on purpose**. A Sharp SPI redraw on a P
 
 | Piece | File | Role |
 |-------|------|------|
-| Detent decode | `encoder.py` → `sequence_step()` | Strict 4-step sequence FSM; only emits after full CW/CCW path completes at idle; invalid/bounced edges discarded |
+| Detent decode | seesaw hardware | On-chip quadrature decode; position counter increments per detent |
 | Input state | `main.py` `scroll()` / `volume()` | `selected` and volume counters updated under `_input_lock` |
 | Display | `main.py` `process_encoder_ui()` | Paints **latest** state; may skip frames while spinning fast — selection is still correct |
-| Bench test | `encoder_probe.py` | Same decoder as production; no display |
+| Bench test | `encoder_probe.py` | Same I2C read as production; no display |
 
-**Rules when changing code**
+Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no I2C).
 
-- Do **not** call `display.render_*` or Sonos HTTP from `encoder.py` callbacks.
-- **Do** update `selected` / volume in `scroll()` / `volume()` (cheap).
-- Button press while spinning is ignored briefly (`ROTATE_QUIET_BEFORE_PRESS_US`) so detents do not fake a click.
-
-Mac / `USE_KEYBOARD=1`: same actions, immediate `_paint_*` (no GPIO).
-
-**Tuning detent feel** (both encoders share `encoder.py`; volume *feels* different because of Sonos batching):
+**Tuning:**
 
 ```bash
-# Encoder counting — sequence FSM (menu + volume GPIO)
-ENCODER_GLITCH_US=300 python main.py       # default 300 (µs) — pigpio glitch filter on CLK/DT
-ENCODER_SEQ_TIMEOUT_US=150000 python main.py  # default 150000 (µs) — abandon partial sequence after this long
-
-# Fast scroll dropping detents? SPI was blocking GPIO — cap redraw rate:
+# Display redraw rate:
 LIST_RENDER_MIN_S=0.05 python main.py      # max ~20 playlist paints/sec while spinning
 LIST_RENDER_IDLE_S=0.04 python main.py     # always paint once after you stop
 
-# Volume only — Sonos flush waits until knob pauses (see logs: vol detent … then vol Sonos ΔN%)
+# Volume — Sonos flush waits until knob pauses (see logs: vol detent … then vol Sonos ΔN%)
 VOLUME_SPIN_IDLE_S=0.04 python main.py   # default 0.05 — pause before API batch
 VOLUME_PCT_PER_DETENT=3 python main.py    # default 2 — % per counted detent
 ```
@@ -453,7 +423,7 @@ DISPLAY_INVERT=0 python display_test.py   # only if white/black look reversed
 | App stops after hours/days | Check `journalctl -u sonos` for OOM (`Killed`) or Sonos token errors. Reload failures no longer kill the main loop. |
 | `Missing SONOS_CLIENT_ID` | Copy `.env` to the repo root on the Pi |
 | `KeyError: access_token` or token refresh error | Re-run `python auth_setup.py` on your Mac, re-copy `controller/tokens.json` |
-| Encoders dead / bounce / false select | `sudo systemctl status pigpiod`; run `python encoder_probe.py`. KY-040: **GND + CLK/DT/SW only**, `+` NC, **never +→GND**. Wire encoder 2 or floating GPIO 5/26/13 can spuriously change volume/play |
+| Encoders dead / not detected | `sudo i2cdetect -y 1` — should show `0x49`. Check VIN (pin 2), GND (pin 6), SDA (pin 3), SCL (pin 5). Run `python encoder_probe.py` to test counting. |
 | Probe OK but menu/volume barely moves in app | Old bug: SPI in GPIO callback. Ensure current `main.py` uses `process_encoder_ui()` — see [Encoder + display architecture](#encoder--display-architecture) |
 | Test on Pi without encoders wired | `USE_KEYBOARD=1 python main.py` over SSH (same keys as Mac) |
 | Test keyboard with SPI enabled but no display | `SIMULATE_DISPLAY=1 USE_KEYBOARD=1 python main.py` |

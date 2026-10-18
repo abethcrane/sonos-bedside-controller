@@ -4,3 +4,4 @@ pillow
 flask
 pigpio
 adafruit-circuitpython-sharpmemorydisplay
+adafruit-circuitpython-seesaw

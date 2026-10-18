@@ -3,12 +3,12 @@
 Sonos bedside controller main loop.
 
 Encoder architecture (Pi + USE_ENCODERS):
-  - pigpio callbacks (encoder.py): count detents, queue button presses — no SPI/HTTP.
+  - seesaw I2C (encoder.py): hardware quadrature decode, polled from main loop.
   - scroll()/volume(): update selected / volume state under _input_lock, set dirty flags.
   - process_encoder_ui() (~20ms): redraw Sharp from latest state only.
   - Sonos volume: _vol_pending flushed on the same ~20ms loop as the display (batched API).
 
-Keyboard/Mac path calls the same actions but renders immediately (no GPIO contention).
+Keyboard/Mac path calls the same actions but renders immediately (no I2C).
 """
 
 import json
@@ -112,7 +112,7 @@ UI_LOOP_S = float(os.environ.get("UI_LOOP_S", "0.02"))
 # Cap Sharp playlist redraws — SPI in the main thread was starving pigpio callbacks.
 LIST_RENDER_MIN_S = float(os.environ.get("LIST_RENDER_MIN_S", "0.05"))
 LIST_RENDER_IDLE_S = float(os.environ.get("LIST_RENDER_IDLE_S", "0.04"))
-# Ignore list-encoder press while scrolling or briefly after (KY-040 SW bounce).
+# Ignore list-encoder press while scrolling or briefly after.
 SCROLL_SELECT_GUARD_S = float(os.environ.get("SCROLL_SELECT_GUARD_S", "0.45"))
 VOLUME_PLAY_GUARD_S = float(os.environ.get("VOLUME_PLAY_GUARD_S", "0.45"))
 # Boot: WiFi/Sonos may not be ready the instant systemd starts us.
@@ -484,15 +484,17 @@ def main():
 
         if USE_ENCODERS:
             enc_list = Encoder(
-                clk=17, dt=27, sw=22, on_rotate=scroll, on_press=select
+                slot=0, sw_pin=12, on_rotate=scroll, on_press=select
             )
             enc_vol = Encoder(
-                clk=5, dt=26, sw=13, on_rotate=volume, on_press=toggle_play_pause
+                slot=2, sw_pin=17, on_rotate=volume, on_press=toggle_play_pause
             )
 
             while True:
                 if should_reload():
                     playlists_by_id, favorites_by_id = do_reload()
+                enc_list.poll()
+                enc_vol.poll()
                 process_encoder_ui()
                 with _input_lock:
                     sel = selected

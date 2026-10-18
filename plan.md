@@ -23,7 +23,7 @@ Rough US-style street prices; shop around.
 | **Premium knob caps** ×2 (e.g. Nanu Arc or similar) | nanu.design / Amazon | ~$20 |
 | **MicroSD card** 16 GB+ (Class 10 / A1 fine) | Amazon | ~$8 |
 | **Power supply** — **USB-C 5 V / 2.5 A** for Zero 2 W; **Pi Zero W v1.1** uses **micro-USB** (still aim for a decent 5 V / 2+ A supply) | Amazon | ~$10 |
-| **Dupont jumpers** + small **perfboard** (clean wiring, not a rat’s nest in the box) | Amazon / Adafruit | ~$5 |
+| **Dupont jumpers** + small **perfboard** (clean wiring, not a rat's nest in the box) | Amazon / Adafruit | ~$5 |
 
 **Electronics subtotal: ~$92**
 
@@ -39,43 +39,24 @@ Rough US-style street prices; shop around.
 
 ### Ordering gotchas
 
-1. **Pi Zero 2 W with headers** — look for **Zero 2 WH** or explicit “with header soldered” so you skip soldering the 40-pin yourself. **Pi Zero W (v1.1)** is fine to start: same 40-pin GPIO and SPI0; it is **slower** and has **512 MB RAM** — watch memory if you add heavy services. Power is **micro-USB**, not USB-C. **Headers:** a bare Zero W needs a **soldered 40-pin male header** (or buy a **v1.1 with header** if in stock and you want to skip that step — same board, convenience only).
+1. **Pi Zero 2 W with headers** — look for **Zero 2 WH** or explicit "with header soldered" so you skip soldering the 40-pin yourself. **Pi Zero W (v1.1)** is fine to start: same 40-pin GPIO and SPI0; it is **slower** and has **512 MB RAM** — watch memory if you add heavy services. Power is **micro-USB**, not USB-C. **Headers:** a bare Zero W needs a **soldered 40-pin male header** (or buy a **v1.1 with header** if in stock and you want to skip that step — same board, convenience only).
 2. **Sharp display** — Adafruit has several Sharp panels; **#4694** is the 2.7" 400×240 **target** for this stack. Smaller panels use different resolutions and sometimes different **CS/DC/RST** pinouts — follow the **product page wiring** and align `display.py` dimensions.
-3. **Encoders** — this build uses **KY-040 breakout modules** (PEC11R-class encoder + PCB pull-ups + push switch). Detents + nice knob caps = the “actuation feel” you want. **Do not tie module `+` to GND** — that shorts the pull-up rail and can brown out the Pi.
+3. **Encoders** — Bourns PEC11R-4215F-S0024 (24 detent, push switch, ≤2ms bounce) soldered onto an [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752). The seesaw chip handles quadrature decoding and debounce in hardware; Pi reads position over I2C. Replaces the original KY-040 modules which had inconsistent signal quality.
 
 ### Pi ↔ peripherals wiring (matches `controller/main.py`)
 
-**Wire colors:** white CLK · grey DT · black SW · brown encoder 1 GND · purple encoder 2 GND · blue display GND · orange 3.3V · red display CLK · yellow display DI · green display CS
+**Encoders — [Adafruit I2C Quad Rotary Encoder Breakout #5752](https://www.adafruit.com/product/5752)** with Bourns PEC11R-4215F-S0024 soldered into positions #0 (playlist) and #1 (volume). Connected to Pi via I2C — **4 dupont wires total** for both encoders.
 
-**Encoders — KY-040 breakout** ([B07T3672VK](https://www.amazon.com/dp/B07T3672VK) or equivalent). Header pins: **CLK · DT · SW · + · GND**. The push switch is wired on the PCB (one **SW** pin only — no second switch leg to Pi).
+| Board pad | Pi | Physical pin |
+|-----------|-----|--------------|
+| **VIN** | 5V | 2 |
+| **-** (GND) | GND | 6 |
+| **D** (SDA) | SDA1 | 3 |
+| **C** (SCL) | SCL1 | 5 |
 
-**Four duponts per module:** CLK, DT, SW, GND. Leave **`+` unconnected** — `encoder.py` enables **Pi internal pull-ups** on CLK/DT/SW; works without tying `+` to 3.3V (saves header pins when the display uses pin 1 and 17). Optional: connect `+` to 3.3V if you have a spare 3.3V tap (display VIN pad, breadboard rail, etc.) — **never** connect `+` to GND.
+I2C address: **0x49** (default, no jumpers cut). Encoder positions: **#0** = playlist scroll + select, **#1** = volume + play/pause.
 
-Duponts: **female → Pi header**, **male → KY-040 header holes**.
-
-**Encoder 1 — playlist scroll + select**
-
-| KY-040 pin | Wire | Pi | BCM GPIO | Physical pin |
-|------------|------|-----|----------|--------------|
-| CLK | White | GPIO | 17 | 11 |
-| DT | Grey | GPIO | 27 | 13 |
-| SW | Black | GPIO | 22 | 15 |
-| GND | Brown | **GND** | — | 6 |
-| + | — | **NC** | — | — |
-
-**Encoder 2 — volume + play/pause**
-
-| KY-040 pin | Wire | Pi | BCM GPIO | Physical pin |
-|------------|------|-----|----------|--------------|
-| CLK | White | GPIO | 5 | 29 |
-| DT | Grey | GPIO | 26 | 37 |
-| SW | Black | GPIO | 13 | 33 |
-| GND | Purple | **GND** | — | 34 |
-| + | — | **NC** | — | — |
-
-**GPIO vs physical header pins** — code uses **BCM GPIO numbers**, not physical pin positions. See [pinout.xyz](https://pinout.xyz/) for the full map.
-
-**Bench test:** `python encoder_probe.py` (decode) or `python encoder_probe.py --raw` on the Pi. Requires `pigpiod`.
+**Bench test:** `sudo i2cdetect -y 1` (should show `0x49`), then `python encoder_probe.py` on the Pi.
 
 **Sharp display (SPI)** — silkscreen: **EIN · DISP · EMD · CS · DI · CLK · GND · 3v3 · VIN**
 
@@ -90,7 +71,7 @@ Duponts: **female → Pi header**, **male → KY-040 header holes**.
 | CS | Green | GPIO | 6 | 31 |
 | EIN, 3v3 | — | NC | — | — |
 
-Full table in [README.md](README.md#hardware-wiring). Display **CS = GPIO 6 (pin 31)**. Encoder 2 **DT = GPIO 26 (pin 37)**.
+Full table in [README.md](README.md#hardware-wiring). Display **CS = GPIO 6 (pin 31)**.
 
 ### Network / config from a Mac
 
@@ -111,14 +92,14 @@ No extra skip button: **long-press on the volume/play-pause encoder** = **next t
 
 **Implementation notes**
 
-- Use a small **press state machine**: debounce, **long-press threshold** (~600–800 ms — tune on hardware), release handling so short vs long doesn’t misfire.
-- On-screen **hold feedback** (bar or “Hold… skip” / “Rooms”) so long-press actions never feel ambiguous.
+- Use a small **press state machine**: debounce, **long-press threshold** (~600–800 ms — tune on hardware), release handling so short vs long doesn't misfire.
+- On-screen **hold feedback** (bar or "Hold… skip" / "Rooms") so long-press actions never feel ambiguous.
 
 ---
 
-## Room presets: what “select rooms” means
+## Room presets: what "select rooms" means
 
-- Playback targets a **Sonos group**; presets are named groups of **rooms/players** (e.g. “All”, “Bedroom”, “Kitchen + Living + Bath”).
+- Playback targets a **Sonos group**; presets are named groups of **rooms/players** (e.g. "All", "Bedroom", "Kitchen + Living + Bath").
 - Same idea as playlists: **editable in config** and ideally in `/ui` later.
 
 ### Proposed config shape (JSON)
@@ -138,7 +119,7 @@ No extra skip button: **long-press on the volume/play-pause encoder** = **next t
 ```
 
 - `rooms[]` should resolve to stable Sonos identifiers (names or player IDs from discovery) once implemented.
-- **Persist** `active_room_preset` across reboots unless you explicitly want “session only.”
+- **Persist** `active_room_preset` across reboots unless you explicitly want "session only."
 
 ---
 
@@ -153,7 +134,7 @@ No extra skip button: **long-press on the volume/play-pause encoder** = **next t
 - `NOW_PLAYING` — idle home screen  
 - `BROWSE_LIST` — playlist list; A rotates selection, A short press loads  
 - `ROOM_CHOOSER` — entered/exited by **long-press A**; A rotates among presets, short press confirms  
-- Toasts — errors, “Preset: Downstairs”, volume tick, etc.
+- Toasts — errors, "Preset: Downstairs", volume tick, etc.
 
 **Encoder B** — volume and play/pause should not force leaving browse unless you decide otherwise; long-press B = skip, with visible hold progress.
 
@@ -173,7 +154,7 @@ Extend `/ui` (and JSON API) the same way as playlists:
 ## Future upgrades (not required for v1)
 
 - **Recessed bezel + LED strip** around the Sharp LCD for a soft glow (separate power/layout planning; Sharp is reflective — lighting is aesthetic, not backlight).
-- **Jellyfin → Sonos** is a separate ecosystem: native paths are messier than first-party music; options include community **Jellyfin Sonos / SMAPI**-style plugins (often need HTTPS reachable to speakers), **DLNA** paths (format quirks), or **Plex** if you want the smoothest official Sonos integration. Treat as **future work**, not part of this box’s core scope.
+- **Jellyfin → Sonos** is a separate ecosystem: native paths are messier than first-party music; options include community **Jellyfin Sonos / SMAPI**-style plugins (often need HTTPS reachable to speakers), **DLNA** paths (format quirks), or **Plex** if you want the smoothest official Sonos integration. Treat as **future work**, not part of this box's core scope.
 
 ---
 
@@ -181,7 +162,7 @@ Extend `/ui` (and JSON API) the same way as playlists:
 
 | Topic | Decision |
 |-------|----------|
-| Hardware core | **Now:** Pi Zero W v1.1 + smaller Sharp; **Target:** Pi Zero 2 WH, Sharp #4694 — 2× KY-040 modules, knobs, SD, supply, duponts |
+| Hardware core | **Now:** Pi Zero W v1.1 + smaller Sharp; **Target:** Pi Zero 2 WH, Sharp #4694 — Bourns PEC11R on Adafruit #5752 I2C breakout, knobs, SD, supply, duponts |
 | Skip | **Long-press** encoder B (play/pause knob) |
 | Rooms | **Long-press** encoder A to enter room mode; **long-press A again** to exit; rotate to choose, short press to confirm |
 | Screen | Default **now playing**; playlist browse as **timeout overlay** |
