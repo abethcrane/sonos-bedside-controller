@@ -95,3 +95,54 @@ def get_album_artists(album_ids):
             if names:
                 out[album["id"]] = ", ".join(names)
     return out
+
+
+def search_album_artist(album_name):
+    """
+    Best-effort album → artist via Spotify search.
+    Used when Sonos favorites omit a spotify:album URI.
+    """
+    name = (album_name or "").strip()
+    if not name:
+        return None
+    token = _client_credentials()
+    if not token:
+        return None
+    resp = requests.get(
+        "https://api.spotify.com/v1/search",
+        headers={"Authorization": f"Bearer {token}"},
+        params={"q": f'album:"{name}"', "type": "album", "limit": 5},
+        timeout=REQUEST_TIMEOUT,
+    )
+    if resp.status_code != 200:
+        return None
+    items = (resp.json().get("albums") or {}).get("items") or []
+    if not items:
+        # looser fallback
+        resp = requests.get(
+            "https://api.spotify.com/v1/search",
+            headers={"Authorization": f"Bearer {token}"},
+            params={"q": name, "type": "album", "limit": 5},
+            timeout=REQUEST_TIMEOUT,
+        )
+        if resp.status_code != 200:
+            return None
+        items = (resp.json().get("albums") or {}).get("items") or []
+    name_l = name.lower()
+    # Prefer exact / case-insensitive title match
+    ordered = sorted(
+        items,
+        key=lambda a: (
+            0 if (a.get("name") or "").lower() == name_l else 1,
+            0 if name_l in (a.get("name") or "").lower() else 1,
+        ),
+    )
+    for album in ordered:
+        names = [
+            a.get("name")
+            for a in (album.get("artists") or [])
+            if a and a.get("name")
+        ]
+        if names:
+            return ", ".join(names)
+    return None

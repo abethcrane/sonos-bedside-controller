@@ -1,4 +1,5 @@
 import json, os, base64, re, requests
+from urllib.parse import unquote
 
 from sonos_credentials import CLIENT_ID, CLIENT_SECRET
 from artist_cache import load_artist_cache, save_artist_cache
@@ -54,27 +55,94 @@ def is_useless_description(desc):
         return True
     return False
 
+def _iter_strings(obj):
+    if isinstance(obj, str):
+        yield obj
+    elif isinstance(obj, dict):
+        for v in obj.values():
+            yield from _iter_strings(v)
+    elif isinstance(obj, list):
+        for v in obj:
+            yield from _iter_strings(v)
+
+
+def _spotify_haystack(item):
+    """All string fields, URL-decoded — Sonos hides Spotify URIs in odd places."""
+    chunks = []
+    for s in _iter_strings(item):
+        if not s:
+            continue
+        chunks.append(s)
+        try:
+            decoded = unquote(s)
+        except Exception:
+            decoded = s
+        if decoded != s:
+            chunks.append(decoded)
+        # also normalize common Sonos encodings
+        chunks.append(s.replace("%3a", ":").replace("%3A", ":"))
+    return "\n".join(chunks)
+
+
 def _spotify_object_id(item):
+    """Best single objectId-like string (resource.id.objectId), else full haystack."""
     resource = item.get("resource") or {}
     obj_id = (resource.get("id") or {}).get("objectId") or ""
     if "spotify:" in obj_id:
         return obj_id[obj_id.index("spotify:"):]
-    return obj_id
+    if obj_id:
+        return obj_id
+    return _spotify_haystack(item)
+
 
 def spotify_artist_id_from_item(item):
-    obj_id = _spotify_object_id(item)
+    text = _spotify_haystack(item)
     match = re.search(
         r"spotify:artistTopTracks:([A-Za-z0-9]+)|spotify:artist:([A-Za-z0-9]+)",
-        obj_id,
+        text,
+        re.I,
     )
     if not match:
         return None
     return match.group(1) or match.group(2)
 
+
 def spotify_album_id_from_item(item):
-    obj_id = _spotify_object_id(item)
-    match = re.search(r"spotify:album:([A-Za-z0-9]+)", obj_id)
+    text = _spotify_haystack(item)
+    match = re.search(r"spotify:album:([A-Za-z0-9]+)", text, re.I)
+    if match:
+        return match.group(1)
+    # Sonos sometimes uses album%3aID without the spotify: prefix nearby
+    match = re.search(r"(?:^|[^a-z])album:([A-Za-z0-9]{22})", text, re.I)
     return match.group(1) if match else None
+
+
+def spotify_playlist_id_from_item(item):
+    text = _spotify_haystack(item)
+    match = re.search(r"spotify:playlist:([A-Za-z0-9]+)", text, re.I)
+    return match.group(1) if match else None
+
+
+def favorite_resource_kind(item):
+    """
+    Rough type of a Sonos favorite for subtitle rules.
+    Playlists have no single artist — don't show a random track artist under them.
+    """
+    if favorite_unsupported(item):
+        return "local"
+    if spotify_playlist_id_from_item(item):
+        return "playlist"
+    if spotify_album_id_from_item(item):
+        return "album"
+    if spotify_artist_id_from_item(item):
+        return "artist"
+    desc = (item.get("description") or "").strip().lower()
+    if desc in ("spotify playlist",) or desc.endswith(" playlist"):
+        return "playlist"
+    # Sonos often tags album favorites with bare "Spotify" (not "Spotify Album")
+    if desc in ("spotify album", "album", "spotify"):
+        return "album"
+    return "other"
 
 def is_generic_favorite_name(name):
     n = (name or "").lower().strip()
@@ -99,6 +167,14 @@ def display_name(name, description="", label="", artist=""):
 def item_artist_name(item, cache=None):
     """Best-effort artist/context for a Sonos favorite or playlist."""
     cache = cache if cache is not None else load_artist_cache()
+    kind = favorite_resource_kind(item)
+    # Playlists / local library: never use a cached track artist as subtitle
+    if kind in ("playlist", "local"):
+        desc = (item.get("description") or "").strip()
+        if desc and not is_useless_description(desc):
+            return desc
+        return None
+
     fav_id = item.get("id")
     if fav_id:
         cached = cache.get("byFavoriteId", {}).get(str(fav_id))
@@ -124,18 +200,34 @@ def item_artist_name(item, cache=None):
 
 def resolve_favorite_artists(favorites, cache=None):
     """Fill cache from Spotify artist/album IDs embedded in Sonos favorites."""
-    from spotify import get_album_artists, get_artists, spotify_configured
+    from spotify import (
+        get_album_artists,
+        get_artists,
+        search_album_artist,
+        spotify_configured,
+    )
 
     cache = cache if cache is not None else load_artist_cache()
     by_spotify = cache.setdefault("bySpotifyArtistId", {})
     by_album = cache.setdefault("bySpotifyAlbumId", {})
     by_fav = cache.setdefault("byFavoriteId", {})
+    by_album_name = cache.setdefault("byAlbumName", {})
     missing_artists = set()
     missing_albums = set()
+    dirty = False
+
+    # Drop stale track-artist subtitles that were wrongly attached to playlists
+    for fav in favorites:
+        fav_id = str(fav.get("id", ""))
+        if fav_id and favorite_resource_kind(fav) in ("playlist", "local") and fav_id in by_fav:
+            del by_fav[fav_id]
+            dirty = True
 
     for fav in favorites:
         fav_id = str(fav.get("id", ""))
         if fav_id and fav_id in by_fav:
+            continue
+        if favorite_resource_kind(fav) in ("playlist", "local"):
             continue
         artist_id = spotify_artist_id_from_item(fav)
         if artist_id and artist_id not in by_spotify:
@@ -147,16 +239,37 @@ def resolve_favorite_artists(favorites, cache=None):
     if spotify_configured():
         if missing_artists:
             by_spotify.update(get_artists(sorted(missing_artists)))
+            dirty = True
         if missing_albums:
             by_album.update(get_album_artists(sorted(missing_albums)))
-        # Stash onto favorites so display works even if album cache is consulted later
+            dirty = True
+        # Stash album artists onto favorites (not playlists)
         for fav in favorites:
             fav_id = str(fav.get("id", ""))
             if not fav_id or fav_id in by_fav:
                 continue
+            if favorite_resource_kind(fav) != "album":
+                continue
             album_id = spotify_album_id_from_item(fav)
             if album_id and album_id in by_album:
                 by_fav[fav_id] = by_album[album_id]
+                dirty = True
+                continue
+            # No URI in the Sonos payload — search Spotify by album title
+            title = (fav.get("name") or "").strip()
+            if not title:
+                continue
+            key = title.lower()
+            artist = by_album_name.get(key)
+            if artist is None:
+                artist = search_album_artist(title) or ""
+                by_album_name[key] = artist
+                dirty = True
+            if artist:
+                by_fav[fav_id] = artist
+                dirty = True
+
+    if dirty:
         save_artist_cache(cache)
 
     return cache
@@ -166,25 +279,38 @@ def sonos_item_context(item, cache=None):
     return item_artist_name(item, cache)
 
 def cache_artist_from_playback(group_id, favorite_id, cache=None):
-    """After loading a favorite, cache artist name from now-playing metadata."""
+    """
+    After loading a favorite, cache artist when it actually describes the favorite.
+    Track artist is fine for artist-top-tracks / albums; wrong for playlists.
+    """
     cache = cache if cache is not None else load_artist_cache()
     meta = get_playback_metadata(group_id)
     artist = (meta.get("currentItem", {}).get("track", {}).get("artist") or {}).get("name")
     if not artist:
         return cache
 
-    by_fav = cache.setdefault("byFavoriteId", {})
-    by_fav[str(favorite_id)] = artist
-
-    container_id = (meta.get("container", {}).get("id") or {}).get("objectId") or ""
+    container = meta.get("container") or {}
+    container_id = (container.get("id") or {}).get("objectId") or ""
     if "spotify:" in container_id:
         container_id = container_id[container_id.index("spotify:"):]
+    ctype = (container.get("type") or "").lower()
+
+    # Playlist favorite → do not store whoever happens to be playing
+    if "spotify:playlist:" in container_id.lower() or ctype == "playlist":
+        return cache
+
+    by_fav = cache.setdefault("byFavoriteId", {})
     match = re.search(r"spotify:artistTopTracks:([A-Za-z0-9]+)", container_id)
     if match:
         cache.setdefault("bySpotifyArtistId", {})[match.group(1)] = artist
+        by_fav[str(favorite_id)] = artist
     album_match = re.search(r"spotify:album:([A-Za-z0-9]+)", container_id)
     if album_match:
         cache.setdefault("bySpotifyAlbumId", {})[album_match.group(1)] = artist
+        by_fav[str(favorite_id)] = artist
+    # Artist radio / other artist-scoped containers
+    elif re.search(r"spotify:artist:([A-Za-z0-9]+)", container_id):
+        by_fav[str(favorite_id)] = artist
 
     save_artist_cache(cache)
     return cache
